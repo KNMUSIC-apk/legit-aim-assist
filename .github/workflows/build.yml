@@ -1,4 +1,4 @@
-Name: Build Fabric Mod
+name: Build Fabric Mod
 
 on:
   push:
