@@ -1,6 +1,7 @@
 package com.example.legitaim.util;
 
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.AbstractClientPlayerEntity;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.util.hit.BlockHitResult;
@@ -12,25 +13,13 @@ import net.minecraft.world.RaycastContext;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * Target selection — ZERO Vec3d allocation trong hot path.
- * - eyePos và lookVec được tính 1 lần / tick ở AimAssist, truyền vào.
- * - Không dùng stream() để tránh lambda allocation.
- * - Iterate theo index + bounds re-check để chống CME.
- */
 public final class TargetUtils {
 
     private static final MinecraftClient mc = MinecraftClient.getInstance();
 
     private TargetUtils() {}
 
-    /**
-     * Tìm target gần nhất thỏa:
-     *  - Trong melee reach
-     *  - Trong FOV cone (cos check)
-     *  - Có Line of Sight
-     */
-    public static Optional<PlayerEntity> findTarget(
+    public static Optional<AbstractClientPlayerEntity> findTarget(
             double reach, double fovDegrees,
             Vec3d eyePos, Vec3d lookVec) {
 
@@ -38,21 +27,20 @@ public final class TargetUtils {
         if (self == null || mc.world == null) return Optional.empty();
 
         double cosFov = Math.cos(Math.toRadians(fovDegrees));
-        List<PlayerEntity> players = mc.world.getPlayers();
+        List<AbstractClientPlayerEntity> players = mc.world.getPlayers();
         int size = players.size();
 
-        PlayerEntity best = null;
+        AbstractClientPlayerEntity best = null;
         double bestDistSq = reach * reach;
 
         for (int i = 0; i < size; i++) {
-            if (i >= players.size()) break; // list shrank
-            PlayerEntity p = players.get(i);
+            if (i >= players.size()) break;
+            AbstractClientPlayerEntity p = players.get(i);
             if (!isValidTarget(self, p)) continue;
 
             double distSq = self.squaredDistanceTo(p);
             if (distSq > bestDistSq) continue;
 
-            // Inline vector math — không tạo Vec3d
             double tx = p.getX() - eyePos.x;
             double ty = (p.getY() + p.getHeight() * 0.5) - eyePos.y;
             double tz = p.getZ() - eyePos.z;
@@ -71,7 +59,6 @@ public final class TargetUtils {
         return Optional.ofNullable(best);
     }
 
-    /** Validate: alive, không spectator, không removed, không invisible tới self. */
     private static boolean isValidTarget(ClientPlayerEntity self, PlayerEntity p) {
         if (p == self) return false;
         if (!p.isAlive()) return false;
@@ -81,10 +68,6 @@ public final class TargetUtils {
         return p.getHealth() > 0.0f;
     }
 
-    /**
-     * LOS check bằng raycast vanilla.
-     * Chỉ tạo 1 Vec3d cho endpoint (API yêu cầu) — không tránh được.
-     */
     public static boolean hasLineOfSight(
             ClientPlayerEntity self, Vec3d eyePos, PlayerEntity target) {
 
