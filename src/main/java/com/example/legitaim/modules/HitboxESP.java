@@ -5,29 +5,17 @@ import com.example.legitaim.config.ModConfig;
 import com.mojang.blaze3d.systems.RenderSystem;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.AbstractClientPlayerEntity;
 import net.minecraft.client.render.RenderLayer;
 import net.minecraft.client.render.VertexConsumer;
 import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.util.math.Box;
 import net.minecraft.util.math.Vec3d;
 import org.joml.Matrix4f;
 
 import java.util.List;
 
-/**
- * Hitbox ESP — WorldRenderEvents.LAST.
- *
- * Fixes:
- *  - Try/catch toàn bộ render body → không crash game.
- *  - Snapshot player list + bounds re-check → không CME.
- *  - Request VertexConsumer MỘT LẦN / frame → không thrash buffer.
- *  - Depth writes OFF + depth test ON khi xuyên tường → không phá HUD.
- *  - GL state restore trong finally.
- *  - Line width clamp 1.0 (an toàn cho macOS/Intel).
- *  - Config snapshot đầu frame → không torn read.
- */
 public final class HitboxESP {
 
     private static final MinecraftClient mc = MinecraftClient.getInstance();
@@ -49,7 +37,7 @@ public final class HitboxESP {
         if (consumers == null) return;
 
         if (mc.world == null) return;
-        List<PlayerEntity> players = mc.world.getPlayers();
+        List<AbstractClientPlayerEntity> players = mc.world.getPlayers();
         if (players == null || players.isEmpty()) return;
 
         try {
@@ -63,10 +51,8 @@ public final class HitboxESP {
                 RenderSystem.enableDepthTest();
             }
 
-            // Line width clamp 1.0 — driver-safe
             RenderSystem.lineWidth(1.0f);
 
-            // Request buffer 1 lần cho tất cả player
             VertexConsumer buffer = consumers.getBuffer(RenderLayer.getLines());
 
             matrices.push();
@@ -75,7 +61,7 @@ public final class HitboxESP {
                 for (int i = 0; i < size; i++) {
                     if (i >= players.size()) break;
 
-                    PlayerEntity player = players.get(i);
+                    AbstractClientPlayerEntity player = players.get(i);
                     if (player == null) continue;
                     if (player == mc.player) continue;
                     if (!player.isAlive()) continue;
@@ -99,7 +85,6 @@ public final class HitboxESP {
                 matrices.pop();
             }
 
-            // Restore GL state
             RenderSystem.depthMask(true);
             RenderSystem.enableDepthTest();
             RenderSystem.disableBlend();
@@ -117,19 +102,16 @@ public final class HitboxESP {
 
         Matrix4f m = matrices.peek().getPositionMatrix();
 
-        // Đáy
         line(m, buffer, x0, y0, z0, x1, y0, z0, r, g, b, a);
         line(m, buffer, x1, y0, z0, x1, y0, z1, r, g, b, a);
         line(m, buffer, x1, y0, z1, x0, y0, z1, r, g, b, a);
         line(m, buffer, x0, y0, z1, x0, y0, z0, r, g, b, a);
 
-        // Đỉnh
         line(m, buffer, x0, y1, z0, x1, y1, z0, r, g, b, a);
         line(m, buffer, x1, y1, z0, x1, y1, z1, r, g, b, a);
         line(m, buffer, x1, y1, z1, x0, y1, z1, r, g, b, a);
         line(m, buffer, x0, y1, z1, x0, y1, z0, r, g, b, a);
 
-        // Cạnh dọc
         line(m, buffer, x0, y0, z0, x0, y1, z0, r, g, b, a);
         line(m, buffer, x1, y0, z0, x1, y1, z0, r, g, b, a);
         line(m, buffer, x1, y0, z1, x1, y1, z1, r, g, b, a);
