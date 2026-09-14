@@ -1,17 +1,18 @@
 package com.example.legitaim.modules;
 
 import com.example.legitaim.config.ModConfig;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.util.hit.EntityHitResult;
+import net.minecraft.util.hit.HitResult;
+
 import java.util.Random;
-import net.minecraft.class_1297;
-import net.minecraft.class_1657;
-import net.minecraft.class_239;
-import net.minecraft.class_310;
-import net.minecraft.class_3966;
-import net.minecraft.class_746;
 
 public final class Triggerbot {
 
-    private static final class_310 mc = class_310.method_1551();
+    private static final MinecraftClient mc = MinecraftClient.getInstance();
     private static final Random RANDOM = new Random();
 
     private static long lastAttackTime = 0L;
@@ -22,23 +23,23 @@ public final class Triggerbot {
 
     public static void tick() {
         ModConfig.TriggerSnapshot cfg = ModConfig.snapshotTrigger();
-        class_746 player = mc.field_1724;
+        ClientPlayerEntity player = mc.player;
 
-        if (!cfg.enabled() || player == null || mc.field_1687 == null) {
+        if (!cfg.enabled() || player == null || mc.world == null) {
             delayInitialized = false;
             return;
         }
 
-        class_239 hit = mc.field_1765;
-        if (hit == null || hit.method_17783() != class_239.class_240.field_1331) return;
+        HitResult hit = mc.crosshairTarget;
+        if (hit == null || hit.getType() != HitResult.Type.ENTITY) return;
 
-        class_1297 entity = ((class_3966) hit).method_17782();
-        if (!(entity instanceof class_1657 target)) return;
-        if (!target.method_5805() || target.method_7325() || target.method_31481()) return;
+        Entity entity = ((EntityHitResult) hit).getEntity();
+        if (!(entity instanceof PlayerEntity target)) return;
+        if (!target.isAlive() || target.isSpectator() || target.isRemoved()) return;
 
-        float cooldown = player.method_7261(0.5f);
+        float cooldown = player.getAttackCooldownProgress(0.5f);
         if (cooldown < 0.999f) return;
-        if (mc.field_1761 == null) return;
+        if (mc.interactionManager == null) return;
 
         long now = System.currentTimeMillis();
 
@@ -51,9 +52,9 @@ public final class Triggerbot {
         if (now - lastAttackTime < nextAttackDelay) return;
 
         // Tấn công mục tiêu
-        mc.field_1761.method_2918(player, target);
+        mc.interactionManager.attackEntity(player, target);
 
-        player.method_6104(player.method_6058());
+        player.swingHand(player.getActiveHand());
 
         lastAttackTime = now;
         delayInitialized = false;
