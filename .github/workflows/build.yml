@@ -1,9 +1,14 @@
+name: Build Fabric Mod
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: Legit-aim-assist
 
     steps:
       - name: Checkout repository
@@ -25,4 +30,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Fabric-Mod-Artifacts
-          path: Legit-aim-assist/build/libs/*.jar
+          path: build/libs/*.jar
