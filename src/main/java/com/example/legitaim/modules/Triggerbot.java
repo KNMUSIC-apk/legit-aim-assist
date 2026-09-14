@@ -1,39 +1,18 @@
 package com.example.legitaim.modules;
 
 import com.example.legitaim.config.ModConfig;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.client.util.InputUtil;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.text.Text;
-import net.minecraft.util.hit.EntityHitResult;
-import net.minecraft.util.hit.HitResult;
-import org.lwjgl.glfw.GLFW;
-
 import java.util.Random;
+import net.minecraft.class_1297;
+import net.minecraft.class_1657;
+import net.minecraft.class_239;
+import net.minecraft.class_310;
+import net.minecraft.class_3966;
+import net.minecraft.class_746;
 
-/**
- * Legit Triggerbot.
- * - Phím R: Bật / Tắt (Toggle) Triggerbot độc lập.
- * - Tự động đánh khi tâm ngắm chạm vào mục tiêu hợp lệ.
- */
 public final class Triggerbot {
 
-    private static final MinecraftClient mc = MinecraftClient.getInstance();
+    private static final class_310 mc = class_310.method_1551();
     private static final Random RANDOM = new Random();
-
-    // Khai báo phím tắt R
-    public static final KeyBinding TOGGLE_KEY = new KeyBinding(
-        "key.legitaim.triggerbot",
-        InputUtil.Type.KEYSYM,
-        GLFW.GLFW_KEY_R, // Gán phím R
-        "category.legitaim"
-    );
-
-    private static boolean enabled = false;
-    private static boolean keyPressedLastTick = false;
 
     private static long lastAttackTime = 0L;
     private static long nextAttackDelay = 0L;
@@ -42,42 +21,27 @@ public final class Triggerbot {
     private Triggerbot() {}
 
     public static void tick() {
-        ClientPlayerEntity player = mc.player;
+        ModConfig.TriggerSnapshot cfg = ModConfig.snapshotTrigger();
+        class_746 player = mc.field_1724;
 
-        // Xử lý sự kiện nhấn phím R để Bật/Tắt
-        boolean isPressed = TOGGLE_KEY.isPressed();
-        if (isPressed && !keyPressedLastTick) {
-            enabled = !enabled;
-            if (player != null) {
-                player.sendMessage(
-                    Text.of("§a[LegitAim] Triggerbot: " + (enabled ? "§2ON" : "§cOFF")),
-                    true
-                );
-            }
-        }
-        keyPressedLastTick = isPressed;
-
-        // Nếu chưa bật hoặc player/world null thì bỏ qua
-        if (!enabled || player == null || mc.world == null) {
+        if (!cfg.enabled() || player == null || mc.field_1687 == null) {
             delayInitialized = false;
             return;
         }
 
-        HitResult hit = mc.crosshairTarget;
-        if (hit == null || hit.getType() != HitResult.Type.ENTITY) return;
+        class_239 hit = mc.field_1765;
+        if (hit == null || hit.method_17783() != class_239.class_240.field_1331) return;
 
-        Entity entity = ((EntityHitResult) hit).getEntity();
-        if (!(entity instanceof PlayerEntity target)) return;
-        if (!target.isAlive() || target.isSpectator() || target.isRemoved()) return;
+        class_1297 entity = ((class_3966) hit).method_17782();
+        if (!(entity instanceof class_1657 target)) return;
+        if (!target.method_5805() || target.method_7325() || target.method_31481()) return;
 
-        // Kiểm tra cooldown
-        float cooldown = player.getAttackCooldownProgress(0.5f);
+        float cooldown = player.method_7261(0.5f);
         if (cooldown < 0.999f) return;
-        if (mc.interactionManager == null) return;
+        if (mc.field_1761 == null) return;
 
         long now = System.currentTimeMillis();
 
-        ModConfig.TriggerSnapshot cfg = ModConfig.snapshotTrigger();
         if (!delayInitialized) {
             long range = Math.max(1L, cfg.maxDelay() - cfg.minDelay());
             nextAttackDelay = cfg.minDelay() + RANDOM.nextInt((int) range);
@@ -86,9 +50,10 @@ public final class Triggerbot {
 
         if (now - lastAttackTime < nextAttackDelay) return;
 
-        // Thực hiện đánh mục tiêu
-        mc.interactionManager.attackEntity(player, target);
-        player.swingHand(player.getActiveHand());
+        // Tấn công mục tiêu
+        mc.field_1761.method_2918(player, target);
+
+        player.method_6104(player.method_6058());
 
         lastAttackTime = now;
         delayInitialized = false;
