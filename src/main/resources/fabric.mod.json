@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "legitaim",
+  "version": "${version}",
+  "name": "Legit Aim Assist",
+  "description": "Legit Aim Assist + Hitbox ESP + Triggerbot cho PvP 1.21.1.",
+  "authors": [ "You" ],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.example.legitaim.LegitAimAssistClient"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.5",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
