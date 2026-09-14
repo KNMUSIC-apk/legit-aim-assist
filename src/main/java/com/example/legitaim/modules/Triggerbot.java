@@ -10,12 +10,6 @@ import net.minecraft.util.hit.HitResult;
 
 import java.util.Random;
 
-/**
- * Legit Triggerbot.
- * - Delay logic: chỉ random lại sau khi attack thành công (không random mỗi tick).
- * - Cooldown check có epsilon.
- * - Tôn trọng `attackEntity()` return value.
- */
 public final class Triggerbot {
 
     private static final MinecraftClient mc = MinecraftClient.getInstance();
@@ -43,14 +37,12 @@ public final class Triggerbot {
         if (!(entity instanceof PlayerEntity target)) return;
         if (!target.isAlive() || target.isSpectator() || target.isRemoved()) return;
 
-        // Cooldown check với epsilon
         float cooldown = player.getAttackCooldownProgress(0.5f);
         if (cooldown < 0.999f) return;
         if (mc.interactionManager == null) return;
 
         long now = System.currentTimeMillis();
 
-        // Roll delay chỉ một lần cho mỗi chu kỳ attack
         if (!delayInitialized) {
             long range = Math.max(1L, cfg.maxDelay() - cfg.minDelay());
             nextAttackDelay = cfg.minDelay() + RANDOM.nextInt((int) range);
@@ -59,8 +51,8 @@ public final class Triggerbot {
 
         if (now - lastAttackTime < nextAttackDelay) return;
 
-        // attackEntity() trả false nếu không thể tấn công (spectator, creative, etc.)
-        if (!mc.interactionManager.attackEntity(player, target)) return;
+        // Tấn công mục tiêu
+        mc.interactionManager.attackEntity(player, target);
 
         player.swingHand(player.getActiveHand());
 
