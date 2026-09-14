@@ -9,6 +9,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Thêm dòng này nếu code của bạn nằm trong thư mục con
+    defaults:
+      run:
+        working-directory: ./Legit-aim-assist
 
     steps:
       - name: Checkout repository
@@ -33,4 +37,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Fabric-Mod-Artifacts
-          path: build/libs/*.jar
+          path: Legit-aim-assist/build/libs/*.jar
