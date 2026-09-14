@@ -19,10 +19,11 @@ public final class Triggerbot {
     private static long nextAttackDelay = 0L;
     private static boolean delayInitialized = false;
 
-    // Biến quản lý Human Reaction Delay (Post-Aim Check)
+    // Quản lý Target & Reaction
     private static Entity lastTarget = null;
     private static long targetAcquiredTime = 0L;
     private static long reactionDelay = 0L;
+    private static int offTargetTicks = 0; // Giúp giữ nhịp khi rê tâm trượt nhẹ
 
     private Triggerbot() {}
 
@@ -36,62 +37,58 @@ public final class Triggerbot {
         }
 
         HitResult hit = mc.crosshairTarget;
-        if (hit == null || hit.getType() != HitResult.Type.ENTITY) {
-            resetTargetState();
-            return;
-        }
+        Entity targetEntity = null;
 
-        Entity entity = ((EntityHitResult) hit).getEntity();
-        if (!(entity instanceof PlayerEntity target)) {
-            resetTargetState();
-            return;
-        }
-
-        if (!target.isAlive() || target.isSpectator() || target.isRemoved()) {
-            resetTargetState();
-            return;
+        if (hit != null && hit.getType() == HitResult.Type.ENTITY) {
+            Entity entity = ((EntityHitResult) hit).getEntity();
+            if (entity instanceof PlayerEntity p && p.isAlive() && !p.isSpectator() && !p.isRemoved()) {
+                targetEntity = p;
+            }
         }
 
         long now = System.currentTimeMillis();
 
-        // 1. Human Reaction Delay: Độ trễ phản ứng ngẫu nhiên khi rê tâm trúng đối thủ (120ms - 180ms)
-        if (lastTarget != target) {
-            lastTarget = target;
-            targetAcquiredTime = now;
-            reactionDelay = 120L + RANDOM.nextInt(60); 
+        // Nếu không ngắm vào mục tiêu, cho phép du di 3 tick trước khi reset hẳn
+        if (targetEntity == null) {
+            offTargetTicks++;
+            if (offTargetTicks > 3) {
+                resetTargetState();
+            }
             return;
         }
 
-        // Bắt buộc chờ đủ thời gian phản xạ người chơi trước khi đánh
+        offTargetTicks = 0; // Đã ngắm lại trúng target
+
+        // 1. Phản xạ nhanh (40ms - 80ms) thay vì 120ms - 180ms
+        if (lastTarget != targetEntity) {
+            lastTarget = targetEntity;
+            targetAcquiredTime = now;
+            reactionDelay = 40L + RANDOM.nextInt(40); 
+            return;
+        }
+
         if (now - targetAcquiredTime < reactionDelay) {
             return;
         }
 
-        // 2. Cooldown Check
-        float cooldown = player.getAttackCooldownProgress(0.5f);
-        if (cooldown < 0.999f) return;
+        // 2. Hạ ngưỡng Cooldown xuống 0.92f để bắt nhịp vung tay chuẩn xác
+        float cooldown = player.getAttackCooldownProgress(0.0f);
+        if (cooldown < 0.92f) return;
         if (mc.interactionManager == null) return;
 
-        // 3. Attack Interval Delay
+        // 3. Xử lý khoảng cách thời gian giữa các cú đánh
         if (!delayInitialized) {
-            long range = Math.max(1L, cfg.maxDelay() - cfg.minDelay());
-            nextAttackDelay = cfg.minDelay() + RANDOM.nextInt((int) range);
+            long minD = Math.max(1L, cfg.minDelay());
+            long maxD = Math.max(minD + 1, cfg.maxDelay());
+            nextAttackDelay = minD + RANDOM.nextInt((int) (maxD - minD));
             delayInitialized = true;
         }
 
         if (now - lastAttackTime < nextAttackDelay) return;
 
-        // 4. Miss Chance (Xác suất 10% đánh trượt)
-        boolean isMiss = RANDOM.nextInt(100) < 10; // 10% cơ hội miss
-
-        if (isMiss) {
-            // Chỉ vung tay đánh gió, không gửi packet attackEntity tới target
-            player.swingHand(player.getActiveHand());
-        } else {
-            // Tấn công thật
-            mc.interactionManager.attackEntity(player, target);
-            player.swingHand(player.getActiveHand());
-        }
+        // 4. Đánh thật 100% nhịp khi đã đủ điều kiện
+        mc.interactionManager.attackEntity(player, targetEntity);
+        player.swingHand(player.getActiveHand());
 
         lastAttackTime = now;
         delayInitialized = false;
@@ -100,6 +97,7 @@ public final class Triggerbot {
     private static void resetTargetState() {
         lastTarget = null;
         targetAcquiredTime = 0L;
+        offTargetTicks = 0;
         delayInitialized = false;
     }
 }
