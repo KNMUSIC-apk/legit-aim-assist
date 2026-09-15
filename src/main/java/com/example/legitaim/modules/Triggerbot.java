@@ -15,8 +15,7 @@ public final class Triggerbot {
 
     private static final MinecraftClient mc = MinecraftClient.getInstance();
 
-    // Ngưỡng khoảng cách vàng để Out-range đối thủ (Vanilla Reach tối đa là 3.0m)
-    private static final double MIN_ATTACK_RANGE = 2.70D;
+    // Giới hạn tầm đánh tối đa chuẩn Vanilla (3.0 khối). Đánh mọi khoảng cách từ 0.0m -> 3.0m.
     private static final double MAX_ATTACK_RANGE = 3.0D;
 
     private Triggerbot() {}
@@ -29,13 +28,13 @@ public final class Triggerbot {
             return;
         }
 
-        // 1. Chỉ kích hoạt khi đang cầm Kiếm (Sword) hoặc Rìu (Axe)
+        // 1. Chỉ kích hoạt khi cầm Kiếm hoặc Rìu
         ItemStack mainHandStack = player.getMainHandStack();
         if (!(mainHandStack.getItem() instanceof SwordItem) && !(mainHandStack.getItem() instanceof AxeItem)) {
             return;
         }
 
-        // 2. Bắt mục tiêu trong crosshair
+        // 2. Bắt mục tiêu trong tâm ngắm
         HitResult hit = mc.crosshairTarget;
         if (hit == null || hit.getType() != HitResult.Type.ENTITY) {
             return;
@@ -50,16 +49,14 @@ public final class Triggerbot {
             return;
         }
 
-        // 3. Tính toán khoảng cách (Distance Check) để đánh Spacing tối ưu
+        // 3. Đánh trong mọi khoảng cách từ 0m đến 3.0m (Không bỏ sót khi đối thủ áp sát < 2.7m)
         double distance = player.distanceTo(target);
-        if (distance < MIN_ATTACK_RANGE || distance > MAX_ATTACK_RANGE) {
-            // Nếu quá xa (> 3.0m) hoặc quá gần (< 2.7m), giữ nhịp di chuyển để căn Spacing
+        if (distance > MAX_ATTACK_RANGE) {
             return;
         }
 
-        // 4. Kiểm tra Cooldown hồi vũ khí (tối ưu 0.95f để ra đòn ngay trước khi đạt 100% nhằm ưu tiên gán Knockback)
+        // 4. Đạt 95% Cooldown là vung đòn ngay
         if (player.getAttackCooldownProgress(0.0f) >= 0.95f) {
-            // 5. Thực hiện đòn đánh theo chuẩn luồng Input của game (tránh bị desync packet / bị khựng)
             mc.interactionManager.attackEntity(player, target);
             player.swingHand(player.getActiveHand());
         }
