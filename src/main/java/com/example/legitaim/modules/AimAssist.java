@@ -22,7 +22,6 @@ public final class AimAssist {
     private static float lastPitchDelta = 0.0f;
     private static final float[] ANGLE_OUT = new float[2];
 
-    // Biến lưu trữ góc nhìn cũ để phát hiện thao tác chuột của người dùng
     private static float prevPlayerYaw = 0.0f;
     private static float prevPlayerPitch = 0.0f;
 
@@ -55,32 +54,31 @@ public final class AimAssist {
 
         AbstractClientPlayerEntity target = targetOpt.get();
         currentTarget = target;
-        disengageFactor = Math.min(1.0f, disengageFactor + 0.35f);
+        
+        // Bắt tâm nhanh hơn, khóa chặt hơn (Tăng từ 0.35 lên 0.45)
+        disengageFactor = Math.min(1.0f, disengageFactor + 0.45f);
 
-        // ============================================================
-        // HỆ THỐNG MỤC TIÊU ĐỘNG (Body Aim & Movement Sway)
-        // ============================================================
         Vec3d targetPos = target.getPos();
         Vec3d targetVel = target.getVelocity();
 
-        // Mặc định: Ngắm vào ngực/bụng (Khoảng 45% chiều cao) thay vì đầu
+        // Ghim vào giữa thân người
         double targetY = targetPos.y + (target.getHeight() * 0.45D);
         double targetX = targetPos.x;
         double targetZ = targetPos.z;
 
         if (!target.isOnGround()) {
-            // Khi nhảy: Lia tâm bám sát chuyển động dọc (Y axis) theo vận tốc
-            targetY += (targetVel.y * 1.25D);
-            targetX += (targetVel.x * 1.50D);
-            targetZ += (targetVel.z * 1.50D);
+            // Khóa chặt trục Y khi đối thủ nhảy
+            targetY += (targetVel.y * 1.15D);
+            targetX += (targetVel.x * 1.30D);
+            targetZ += (targetVel.z * 1.30D);
         } else {
-            // Khi trên mặt đất: Tạo hiệu ứng dao động nhẹ xung quanh thân (Lia tâm ngẫu nhiên)
-            double swayAmount = 0.15D;
-            targetX += Math.cos(tickCounter * 0.25) * swayAmount;
-            targetZ += Math.sin(tickCounter * 0.25) * swayAmount;
-            // Vẫn đón đầu một chút nếu họ đang đi bộ
-            targetX += (targetVel.x * 1.10D);
-            targetZ += (targetVel.z * 1.10D);
+            // Giảm độ rung lắc đi dạo (Sway) để aim cứng cáp hơn (0.15 xuống 0.05)
+            double swayAmount = 0.05D; 
+            targetX += Math.cos(tickCounter * 0.3) * swayAmount;
+            targetZ += Math.sin(tickCounter * 0.3) * swayAmount;
+            
+            targetX += (targetVel.x * 1.05D);
+            targetZ += (targetVel.z * 1.05D);
         }
 
         RotationUtils.calculateAngles(
@@ -89,26 +87,24 @@ public final class AimAssist {
             ANGLE_OUT
         );
 
-        // ============================================================
-        // TƯƠNG THÍCH CHUỘT TAY (Mouse Override Detection)
-        // ============================================================
-        // Tính toán xem người chơi có đang chủ động vẩy chuột trong tick này không
         float userYawMovement = Math.abs(player.getYaw() - prevPlayerYaw);
         float userPitchMovement = Math.abs(player.getPitch() - prevPlayerPitch);
         
-        // Nếu người chơi đang vẩy chuột mạnh (gốc lệch lớn), tạm thời giảm lực AimAssist
+        // TIGHTER AIM: Khi dùng chuột tay, vẫn giữ lại 65% sức mạnh của AimAssist (thay vì 25% như trước)
+        // Tạo cảm giác chuột có "nam châm" hút vào người
         float mouseInterferenceMultiplier = 1.0f;
         if (userYawMovement > 3.0f || userPitchMovement > 3.0f) {
-            mouseInterferenceMultiplier = 0.25f; // Giảm 75% lực can thiệp để không cản trở tay
+            mouseInterferenceMultiplier = 0.65f; 
         }
 
-        float effectiveSpeed = cfg.speed() * disengageFactor * mouseInterferenceMultiplier;
+        // Tăng hệ số tốc độ cơ sở lên 1.35x để bám dính tốt hơn khi đối thủ strafe
+        float effectiveSpeed = cfg.speed() * 1.35f * disengageFactor * mouseInterferenceMultiplier;
 
         float[] result = RotationUtils.smoothRotation(
             player.getYaw(), player.getPitch(),
             ANGLE_OUT[0], ANGLE_OUT[1],
             effectiveSpeed,
-            cfg.jitter() * mouseInterferenceMultiplier, // Bỏ jitter nếu đang lia chuột tay
+            cfg.jitter() * (mouseInterferenceMultiplier == 1.0f ? 1.0f : 0.5f), // Giảm jitter một nửa nếu đang cầm chuột
             cfg.maxYawPerTick(),
             cfg.maxPitchPerTick()
         );
@@ -119,7 +115,6 @@ public final class AimAssist {
         player.setYaw(result[0]);
         player.setPitch(result[1]);
 
-        // Lưu lại vị trí để so sánh tick tiếp theo
         prevPlayerYaw = player.getYaw();
         prevPlayerPitch = player.getPitch();
     }
@@ -134,15 +129,14 @@ public final class AimAssist {
             return;
         }
         if (disengageFactor > 0.0f) {
-            disengageFactor = Math.max(0.0f, disengageFactor - 0.20f);
+            disengageFactor = Math.max(0.0f, disengageFactor - 0.25f); // Ngắt mục tiêu dứt khoát hơn
             float decay = disengageFactor * 0.5f;
             
-            // Tôn trọng di chuyển chuột khi đang nhả tâm
             player.setYaw(player.getYaw() + lastYawDelta * decay);
             player.setPitch(player.getPitch() + lastPitchDelta * decay);
 
-            lastYawDelta   *= 0.60f;
-            lastPitchDelta *= 0.60f;
+            lastYawDelta   *= 0.50f;
+            lastPitchDelta *= 0.50f;
         } else {
             currentTarget = null;
             lastYawDelta = 0.0f;
