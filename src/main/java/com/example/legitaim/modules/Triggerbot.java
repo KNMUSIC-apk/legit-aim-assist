@@ -18,16 +18,49 @@ public final class Triggerbot {
     private static final MinecraftClient mc = MinecraftClient.getInstance();
     private static final Random random = new Random();
 
-    // Cấu hình để tạo sự bất định
-    private static final double MAX_ATTACK_RANGE = 3.0D;
-    private static final double MIN_COOLDOWN_PERCENT = 0.85D; // Cooldown tối thiểu (85%)
-    private static final double MAX_COOLDOWN_PERCENT = 0.98D; // Cooldown tối đa (98%)
-    private static final int MIN_REACTION_DELAY_MS = 50;    // Độ trễ phản ứng tối thiểu (ms)
-    private static final int MAX_REACTION_DELAY_MS = 150;   // Độ trễ phản ứng tối đa (ms)
+    // ============================================================
+    // 1. WEAPON FILTER
+    // ============================================================
+    // Chỉ đánh khi cầm Kiếm hoặc Rìu. Các item khác (Block, Food,
+    // Pickaxe, Bow...) sẽ tự động ngắt để không đánh nhầm.
 
-    // Biến trạng thái để theo dõi mục tiêu và thời gian
+    // ============================================================
+    // 2. REACH RANGE CONTROL (2.75 - 3.0 blocks)
+    // ============================================================
+    // Chỉ tung đòn khi khoảng cách nằm trong "sweet spot" của reach.
+    // - Dưới 2.5m  : đối thủ đã áp sát → không đánh vội, ưu tiên W-tap
+    // - 2.75-3.0m : vùng lý tưởng → đánh để out-range
+    // - Trên 3.0m  : quá xa, không với tới
+    private static final double MIN_REACH = 2.75D;
+    private static final double MAX_REACH = 3.0D;
+
+    // Ngưỡng "nguy hiểm" - dưới ngưỡng này coi như bị áp sát
+    private static final double DANGER_RANGE = 2.5D;
+
+    // ============================================================
+    // 3. REACTION DELAY (giảm mạnh để không bị combo)
+    // ============================================================
+    // Chỉ delay ở cú đánh ĐẦU TIÊN khi mục tiêu mới vào crosshair.
+    // Các cú tiếp theo trong cùng mục tiêu sẽ đánh gần như tức thì
+    // (chỉ chờ cooldown của game).
+    private static final int FIRST_HIT_DELAY_MIN = 40;   // ms
+    private static final int FIRST_HIT_DELAY_MAX = 90;   // ms
+
+    // ============================================================
+    // 4. W-TAP (Sprint Reset)
+    // ============================================================
+    // Sau mỗi cú đánh, tự động nhả sprint 1 tick để tăng knockback.
+    // Đây là kỹ thuật PvP thật, giúp đẩy đối thủ ra xa, tránh bị combo.
+    private static final boolean W_TAP_ENABLED = true;
+    private static final int W_TAP_COOLDOWN_TICKS = 1;
+
+    // ============================================================
+    // 5. STATE MACHINE
+    // ============================================================
     private static PlayerEntity lastTarget = null;
     private static long targetEnterTime = 0L;
+    private static int wTapTicks = 0;
+    private static boolean wTapPending = false;
 
     private Triggerbot() {}
 
@@ -35,19 +68,37 @@ public final class Triggerbot {
         ModConfig.TriggerSnapshot cfg = ModConfig.snapshotTrigger();
         ClientPlayerEntity player = mc.player;
 
+        // --- Reset nếu thiếu điều kiện cơ bản ---
         if (!cfg.enabled() || player == null || mc.world == null || mc.interactionManager == null) {
             resetState();
             return;
         }
 
-        // 1. Chỉ kích hoạt khi cầm Kiếm hoặc Rìu
+        // --- Xử lý W-tap đang chờ ---
+        if (wTapPending) {
+            if (wTapTicks > 0) {
+                wTapTicks--;
+            } else {
+                // Nhả W-tap: cho sprint lại (nếu người chơi vẫn đang đi tới)
+                wTapPending = false;
+            }
+            // Trong lúc W-tap, vẫn cho phép đánh (không return)
+        }
+
+        // ============================================================
+        // WEAPON FILTER
+        // ============================================================
         ItemStack mainHandStack = player.getMainHandStack();
-        if (!(mainHandStack.getItem() instanceof SwordItem) && !(mainHandStack.getItem() instanceof AxeItem)) {
+        boolean isWeapon = mainHandStack.getItem() instanceof SwordItem
+                        || mainHandStack.getItem() instanceof AxeItem;
+        if (!isWeapon) {
             resetState();
             return;
         }
 
-        // 2. Bắt mục tiêu trong tâm ngắm
+        // ============================================================
+        // CROSSHAIR TARGET CHECK
+        // ============================================================
         HitResult hit = mc.crosshairTarget;
         if (hit == null || hit.getType() != HitResult.Type.ENTITY) {
             resetState();
@@ -65,42 +116,100 @@ public final class Triggerbot {
             return;
         }
 
-        // 3. Đánh trong mọi khoảng cách từ 0m đến 3.0m
+        // ============================================================
+        // REACH RANGE CONTROL
+        // ============================================================
         double distance = player.distanceTo(target);
-        if (distance > MAX_ATTACK_RANGE) {
+
+        // Trên 3.0m: ngoài tầm, không đánh
+        if (distance > MAX_REACH) {
             resetState();
             return;
         }
 
-        // 4. Logic thêm độ trễ phản ứng khi mục tiêu mới vào tâm ngắm
+        // Dưới 2.5m: đối thủ áp sát → ưu tiên W-tap để tạo khoảng cách
+        // thay vì đánh trade (tránh bị combo ngược)
+        boolean inDangerZone = distance < DANGER_RANGE;
+
+        // ============================================================
+        // REACTION DELAY (chỉ áp dụng cho cú đầu)
+        // ============================================================
         long currentTime = System.currentTimeMillis();
         if (target != lastTarget) {
-            // Mục tiêu mới, đặt lại thời gian và tạo độ trễ ngẫu nhiên
+            // Mục tiêu mới → ghi nhận thời điểm + delay ngẫu nhiên
             lastTarget = target;
             targetEnterTime = currentTime;
-            return; // Bỏ qua tick này để mô phỏng thời gian phản ứng
+            int delay = FIRST_HIT_DELAY_MIN
+                      + random.nextInt(FIRST_HIT_DELAY_MAX - FIRST_HIT_DELAY_MIN + 1);
+            // Cho phép đánh ngay nếu đang ở trong sweet spot
+            if (distance >= MIN_REACH && distance <= MAX_REACH) {
+                targetEnterTime = currentTime - delay; // bỏ qua delay
+            }
+            return;
         }
 
-        // Kiểm tra xem đã đủ thời gian phản ứng chưa
-        long reactionDelay = MIN_REACTION_DELAY_MS + random.nextInt(MAX_REACTION_DELAY_MS - MIN_REACTION_DELAY_MS + 1);
-        if (currentTime - targetEnterTime < reactionDelay) {
-            return; // Chưa đủ thời gian phản ứng, chờ thêm
+        // Áp delay cho cú đầu (chỉ khi target đã ổn định)
+        if (targetEnterTime != 0L && currentTime - targetEnterTime < FIRST_HIT_DELAY_MIN) {
+            return;
         }
 
-        // 5. Đánh khi cooldown đạt ngưỡng ngẫu nhiên (từ 85% đến 98%)
-        double cooldownThreshold = MIN_COOLDOWN_PERCENT + (random.nextDouble() * (MAX_COOLDOWN_PERCENT - MIN_COOLDOWN_PERCENT));
-        if (player.getAttackCooldownProgress(0.0f) >= cooldownThreshold) {
-            mc.interactionManager.attackEntity(player, target);
-            player.swingHand(player.getActiveHand());
-            
-            // Đặt lại thời gian để tạo độ trễ cho cú đánh tiếp theo
-            targetEnterTime = currentTime + random.nextInt(100); // Thêm một chút ngẫu nhiên
+        // ============================================================
+        // ATTACK LOGIC
+        // ============================================================
+        // Cooldown check: chỉ đánh khi đã hồi đủ (>= 0.92)
+        // Không random quá cao để tránh mất nhịp combo
+        float cooldown = player.getAttackCooldownProgress(0.0f);
+        if (cooldown < 0.92f) {
+            return;
+        }
+
+        // Nếu đang trong danger zone VÀ chưa ở sweet spot
+        // → không đánh vội, ưu tiên W-tap để đẩy ra
+        if (inDangerZone) {
+            // Nhưng nếu đang bị combo (health thấp + đối thủ đánh liên tục)
+            // thì vẫn phải đánh để phá combo
+            boolean mustFightBack = player.getHealth() < 8.0f
+                                 && target.getAttackCooldownProgress(0.0f) > 0.9f;
+            if (!mustFightBack) {
+                return;
+            }
+        }
+
+        // ============================================================
+        // PRIMARY ATTACK SIMULATION (doAttack)
+        // ============================================================
+        // Dùng mc.doAttack() thay vì interactionManager.attackEntity()
+        // → đi đúng luồng input gốc của Minecraft, không bị desync.
+        // mc.doAttack() tự xử lý:
+        //   - attackEntity
+        //   - swingHand
+        //   - packet gửi server
+        //   - cooldown reset
+        if (mc.crosshairTarget != null
+                && mc.crosshairTarget.getType() == HitResult.Type.ENTITY) {
+
+            // W-tap: nhả sprint trước khi đánh (nếu đang sprint)
+            if (W_TAP_ENABLED && player.isSprinting()) {
+                player.setSprinting(false);
+                wTapPending = true;
+                wTapTicks = W_TAP_COOLDOWN_TICKS;
+            }
+
+            // Gọi doAttack - cách chuẩn nhất
+            mc.doAttack();
+
+            // Reset timer cho cú tiếp theo (nhưng không delay lâu)
+            targetEnterTime = currentTime;
         }
     }
 
-    // Hàm hỗ trợ reset trạng thái khi mất mục tiêu
+    // ============================================================
+    // HELPER
+    // ============================================================
     private static void resetState() {
         lastTarget = null;
         targetEnterTime = 0L;
+        wTapPending = false;
+        wTapTicks = 0;
     }
 }
