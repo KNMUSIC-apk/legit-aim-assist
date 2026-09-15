@@ -39,7 +39,6 @@ public final class AimAssist {
         Vec3d eyePos = player.getEyePos();
         Vec3d lookVec = player.getRotationVec(1.0f);
 
-        // Đã sửa Optional<PlayerEntity> thành Optional<AbstractClientPlayerEntity>
         Optional<AbstractClientPlayerEntity> targetOpt = TargetUtils.findTarget(
             cfg.reach(), cfg.fov(), eyePos, lookVec
         );
@@ -51,24 +50,38 @@ public final class AimAssist {
 
         AbstractClientPlayerEntity target = targetOpt.get();
         currentTarget = target;
-        disengageFactor = Math.min(1.0f, disengageFactor + 0.15f);
+        
+        // Khóa tâm cực nhanh khi vừa phát hiện mục tiêu
+        disengageFactor = Math.min(1.0f, disengageFactor + 0.40f);
 
         if (tickCounter % cfg.updateInterval() == 0) {
             RotationUtils.getDynamicAimPoint(target, AIM_POINT);
         }
 
+        // ============================================================
+        // TARGET MOTION PREDICTION (Dự đoán hướng di chuyển)
+        // ============================================================
+        Vec3d targetVel = target.getVelocity();
+        // Bù góc đón đầu dựa trên vận tốc hiện tại của đối thủ (đặc biệt hiệu quả khi combo/strafe)
+        double predictedX = AIM_POINT[0] + (targetVel.x * 1.85D);
+        double predictedY = AIM_POINT[1] + (targetVel.y * 0.85D);
+        double predictedZ = AIM_POINT[2] + (targetVel.z * 1.85D);
+
         RotationUtils.calculateAngles(
             eyePos.x, eyePos.y, eyePos.z,
-            AIM_POINT[0], AIM_POINT[1], AIM_POINT[2],
+            predictedX, predictedY, predictedZ,
             ANGLE_OUT
         );
+
+        float effectiveSpeed = cfg.speed() * 1.30f * disengageFactor;
 
         float[] result = RotationUtils.smoothRotation(
             player.getYaw(), player.getPitch(),
             ANGLE_OUT[0], ANGLE_OUT[1],
-            cfg.speed() * disengageFactor,
+            effectiveSpeed,
             cfg.jitter(),
-            cfg.maxYawPerTick(), cfg.maxPitchPerTick()
+            cfg.maxYawPerTick() * 1.25f,
+            cfg.maxPitchPerTick() * 1.25f
         );
 
         lastYawDelta   = wrapDegrees(result[0] - player.getYaw());
@@ -89,14 +102,14 @@ public final class AimAssist {
         }
 
         if (disengageFactor > 0.0f) {
-            disengageFactor = Math.max(0.0f, disengageFactor - 0.08f);
+            disengageFactor = Math.max(0.0f, disengageFactor - 0.15f);
 
             float decay = disengageFactor * 0.5f;
             player.setYaw(player.getYaw() + lastYawDelta * decay);
             player.setPitch(player.getPitch() + lastPitchDelta * decay);
 
-            lastYawDelta   *= 0.85f;
-            lastPitchDelta *= 0.85f;
+            lastYawDelta   *= 0.75f;
+            lastPitchDelta *= 0.75f;
         } else {
             currentTarget = null;
             lastYawDelta = 0.0f;
