@@ -19,7 +19,7 @@ public final class Triggerbot {
     private static final MinecraftClient mc = MinecraftClient.getInstance();
     private static final Random random = new Random();
 
-    // Cache lại Reflection Method để bypass private access doAttack()
+    // Reflection bypass private access doAttack()
     private static Method doAttackMethod = null;
 
     static {
@@ -40,36 +40,25 @@ public final class Triggerbot {
     }
 
     // ============================================================
-    // 1. PVP REACH RANGE (Chuẩn PvP Sword 3.0 blocks)
+    // 1. CONFIG PVP
     // ============================================================
     private static final double MAX_REACH = 3.0D;
-
-    // ============================================================
-    // 2. REACTION DELAY (Delay phản xạ cú đầu tiên: 15-45ms cực nhạy)
-    // ============================================================
     private static final int FIRST_HIT_DELAY_MIN = 15;
-    private static final int FIRST_HIT_DELAY_MAX = 45;
+    private static final int FIRST_HIT_DELAY_MAX = 35;
 
     // ============================================================
-    // 3. PRO PVP COMBO PAUSE SYSTEM (Nghỉ 1 nhịp sau 5-8 hits)
+    // 2. PRO PVP PAUSE SYSTEM (Nghỉ 1 nhịp sau 5-8 hits)
     // ============================================================
     private static int hitCount = 0;
     private static int targetHitsToPause = getRandomPauseThreshold();
     private static long pauseUntilTime = 0L;
 
     // ============================================================
-    // 4. W-TAP (Sprint Reset)
-    // ============================================================
-    private static final boolean W_TAP_ENABLED = true;
-    private static final int W_TAP_COOLDOWN_TICKS = 1;
-
-    // ============================================================
-    // 5. STATE MACHINE
+    // 3. STATE MACHINE & W-TAP CONTROL
     // ============================================================
     private static PlayerEntity lastTarget = null;
     private static long targetEnterTime = 0L;
-    private static int wTapTicks = 0;
-    private static boolean wTapPending = false;
+    private static boolean needWTapReset = false;
 
     private Triggerbot() {}
 
@@ -77,23 +66,22 @@ public final class Triggerbot {
         ModConfig.TriggerSnapshot cfg = ModConfig.snapshotTrigger();
         ClientPlayerEntity player = mc.player;
 
-        // --- Reset trạng thái nếu thiếu điều kiện cơ bản ---
+        // --- Reset trạng thái ---
         if (!cfg.enabled() || player == null || mc.world == null || mc.interactionManager == null) {
             resetState();
             return;
         }
 
-        // --- Xử lý W-tap đang chờ ---
-        if (wTapPending) {
-            if (wTapTicks > 0) {
-                wTapTicks--;
-            } else {
-                wTapPending = false;
+        // --- Xử lý W-Tap khôi phục Sprint an toàn ---
+        if (needWTapReset) {
+            if (player.isOnGround() && mc.options.forwardKey.isPressed()) {
+                player.setSprinting(true);
             }
+            needWTapReset = false;
         }
 
         // ============================================================
-        // WEAPON FILTER (Kiểm tra Kiếm / Rìu)
+        // WEAPON FILTER
         // ============================================================
         ItemStack mainHandStack = player.getMainHandStack();
         boolean isWeapon = mainHandStack.getItem() instanceof SwordItem
@@ -123,26 +111,24 @@ public final class Triggerbot {
             return;
         }
 
-        // Kiểm tra tầm đánh (Trong khoảng 3.0 blocks)
-        double distance = player.distanceTo(target);
-        if (distance > MAX_REACH) {
+        // Kiểm tra khoảng cách
+        if (player.distanceTo(target) > MAX_REACH) {
             resetState();
             return;
         }
 
         long currentTime = System.currentTimeMillis();
 
-        // Check xem có đang trong nhịp "khử/chậm lại 1 nhịp" (Pro PVP Pause) hay không
+        // Kiểm tra nhịp nghỉ 5-8 đòn
         if (currentTime < pauseUntilTime) {
             return;
         }
 
         // ============================================================
-        // REACTION DELAY (Chỉ áp dụng rất nhẹ cho đòn mở đầu)
+        // REACTION DELAY (Đòn đầu tiên)
         // ============================================================
         if (target != lastTarget) {
             lastTarget = target;
-            targetEnterTime = currentTime;
             hitCount = 0;
             targetHitsToPause = getRandomPauseThreshold();
             int firstDelay = FIRST_HIT_DELAY_MIN + random.nextInt(FIRST_HIT_DELAY_MAX - FIRST_HIT_DELAY_MIN + 1);
@@ -155,39 +141,34 @@ public final class Triggerbot {
         }
 
         // ============================================================
-        // ATTACK COOLDOWN CHECK (Nhịp đánh Pro PVP)
+        // ATTACK COOLDOWN CHECK
         // ============================================================
-        // 0.95f đảm bảo đòn đánh tung ra luôn đạt full sát thương và knockback
         float cooldown = player.getAttackCooldownProgress(0.0f);
-        if (cooldown < 0.95f) {
+        if (cooldown < 0.92f) {
             return;
         }
 
         // ============================================================
-        // EXECUTE ATTACK & W-TAP
+        // EXECUTE ATTACK & SMOOTH CRIT / W-TAP
         // ============================================================
         if (mc.crosshairTarget != null && mc.crosshairTarget.getType() == HitResult.Type.ENTITY) {
 
-            // Nhả sprint 1 tick ngay khi tung đòn để tạo W-Tap knockback chuẩn
-            if (W_TAP_ENABLED && player.isSprinting()) {
+            // CHỈ W-TAP KHI Ở TRÊN ĐẤT: Tránh làm giật/khựng đà khi đang nhảy Crit
+            if (player.isOnGround() && player.isSprinting()) {
                 player.setSprinting(false);
-                wTapPending = true;
-                wTapTicks = W_TAP_COOLDOWN_TICKS;
+                needWTapReset = true;
             }
 
             // Gọi doAttack qua Reflection
             invokeDoAttack();
 
-            // Tăng số đòn đánh thành công
             hitCount++;
 
-            // Kiểm tra xem đã đạt ngưỡng 5-8 đòn để tạo nhịp "tạm hoãn/chậm 1 nhịp" chưa
+            // Kiểm tra ngưỡng hoãn 1 nhịp (5-8 hits)
             if (hitCount >= targetHitsToPause) {
-                // Tạm dừng từ 120ms đến 220ms (tương đương chậm lại đúng 1 nhịp đánh)
-                int pauseDuration = 120 + random.nextInt(101);
+                int pauseDuration = 110 + random.nextInt(90); // 110ms - 200ms
                 pauseUntilTime = currentTime + pauseDuration;
 
-                // Reset bộ đếm nhịp cho chuỗi combo tiếp theo
                 hitCount = 0;
                 targetHitsToPause = getRandomPauseThreshold();
             }
@@ -195,7 +176,6 @@ public final class Triggerbot {
     }
 
     private static int getRandomPauseThreshold() {
-        // Trả về ngẫu nhiên số đòn từ 5 đến 8
         return 5 + random.nextInt(4);
     }
 
@@ -219,8 +199,7 @@ public final class Triggerbot {
     private static void resetState() {
         lastTarget = null;
         targetEnterTime = 0L;
-        wTapPending = false;
-        wTapTicks = 0;
+        needWTapReset = false;
         hitCount = 0;
         pauseUntilTime = 0L;
     }
