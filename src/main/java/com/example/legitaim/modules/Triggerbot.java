@@ -10,7 +10,6 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.item.SwordItem;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.Vec3d;
 
 import java.lang.reflect.Method;
 import java.util.Random;
@@ -19,7 +18,6 @@ public final class Triggerbot {
 
     private static final MinecraftClient mc = MinecraftClient.getInstance();
     private static final Random random = new Random();
-
     private static Method doAttackMethod = null;
 
     static {
@@ -39,16 +37,9 @@ public final class Triggerbot {
         }
     }
 
-    private static final double MAX_REACH = 3.0D;
-    private static final int FIRST_HIT_DELAY_MIN = 10;
-    private static final int FIRST_HIT_DELAY_MAX = 30;
-
     private static int hitCount = 0;
     private static int targetHitsToPause = getRandomPauseThreshold();
     private static long pauseUntilTime = 0L;
-
-    private static PlayerEntity lastTarget = null;
-    private static long targetEnterTime = 0L;
     private static boolean needWTapReset = false;
 
     private Triggerbot() {}
@@ -77,91 +68,48 @@ public final class Triggerbot {
             return;
         }
 
+        // TỐI ƯU REACH: Sử dụng trực tiếp hệ thống Raycast gốc của Minecraft.
+        // Chỉ cần Entity nằm trong crosshairTarget (chuẩn bounding box và góc ngắm) là cho phép đánh.
         HitResult hit = mc.crosshairTarget;
         if (hit == null || hit.getType() != HitResult.Type.ENTITY) {
-            resetState();
             return;
         }
 
         Entity entity = ((EntityHitResult) hit).getEntity();
-        if (!(entity instanceof PlayerEntity target)) {
-            resetState();
-            return;
-        }
-
-        if (!target.isAlive() || target.isSpectator() || target.isRemoved()) {
-            resetState();
-            return;
-        }
-
-        if (player.distanceTo(target) > MAX_REACH) {
-            resetState();
-            return;
-        }
-
-        // ============================================================
-        // TRIGGER SAFETY CHECK (Kiểm tra góc lệch tâm chống đánh hụt)
-        // ============================================================
-        Vec3d targetEye = target.getEyePos();
-        Vec3d playerLook = player.getRotationVec(1.0f);
-        Vec3d toTarget = targetEye.subtract(player.getEyePos()).normalize();
-
-        double dotProduct = playerLook.dotProduct(toTarget);
-        double angleDelta = Math.toDegrees(Math.acos(Math.min(1.0, Math.max(-1.0, dotProduct))));
-
-        // Nếu tâm đang lệch quá 12 độ, chờ AimAssist lia tới chuẩn xác mới vung kiếm
-        if (angleDelta > 12.0) {
+        if (!(entity instanceof PlayerEntity target) || !target.isAlive() || target.isSpectator() || target.isRemoved()) {
             return;
         }
 
         long currentTime = System.currentTimeMillis();
-
         if (currentTime < pauseUntilTime) {
             return;
         }
 
-        if (target != lastTarget) {
-            lastTarget = target;
+        // TỐI ƯU COOLDOWN: Đảm bảo đánh đúng nhịp (0.92f - 1.0f) không bị delay thêm tick nào.
+        float cooldown = player.getAttackCooldownProgress(0.0f);
+        if (cooldown < 0.95f) { // 0.95f để đảm bảo max sát thương và knockback
+            return;
+        }
+
+        // TUNG ĐÒN NGAY LẬP TỨC (Không cần kiểm tra targetEnterTime hay angleDelta)
+        if (player.isOnGround() && player.isSprinting()) {
+            player.setSprinting(false);
+            needWTapReset = true;
+        }
+
+        invokeDoAttack();
+        hitCount++;
+
+        // Nghỉ 1 nhịp siêu ngắn sau 6-9 hits để làm mới chuỗi combo
+        if (hitCount >= targetHitsToPause) {
+            pauseUntilTime = currentTime + (80 + random.nextInt(70)); // Nghỉ 80ms - 150ms
             hitCount = 0;
             targetHitsToPause = getRandomPauseThreshold();
-            int firstDelay = FIRST_HIT_DELAY_MIN + random.nextInt(FIRST_HIT_DELAY_MAX - FIRST_HIT_DELAY_MIN + 1);
-            targetEnterTime = currentTime + firstDelay;
-            return;
-        }
-
-        if (currentTime < targetEnterTime) {
-            return;
-        }
-
-        float cooldown = player.getAttackCooldownProgress(0.0f);
-        if (cooldown < 0.92f) {
-            return;
-        }
-
-        if (mc.crosshairTarget != null && mc.crosshairTarget.getType() == HitResult.Type.ENTITY) {
-
-            // W-Tap mượt khi ở dưới đất, giữ nguyên đà khi nhảy Crit
-            if (player.isOnGround() && player.isSprinting()) {
-                player.setSprinting(false);
-                needWTapReset = true;
-            }
-
-            invokeDoAttack();
-
-            hitCount++;
-
-            if (hitCount >= targetHitsToPause) {
-                int pauseDuration = 100 + random.nextInt(80); // 100ms - 180ms
-                pauseUntilTime = currentTime + pauseDuration;
-
-                hitCount = 0;
-                targetHitsToPause = getRandomPauseThreshold();
-            }
         }
     }
 
     private static int getRandomPauseThreshold() {
-        return 5 + random.nextInt(4);
+        return 6 + random.nextInt(4); // 6 đến 9 đòn
     }
 
     private static void invokeDoAttack() {
@@ -182,8 +130,6 @@ public final class Triggerbot {
     }
 
     private static void resetState() {
-        lastTarget = null;
-        targetEnterTime = 0L;
         needWTapReset = false;
         hitCount = 0;
         pauseUntilTime = 0L;
