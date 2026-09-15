@@ -8,6 +8,7 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.AxeItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.SwordItem;
+import net.minecraft.util.Hand;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
 
@@ -48,7 +49,8 @@ public final class Triggerbot {
         ModConfig.TriggerSnapshot cfg = ModConfig.snapshotTrigger();
         ClientPlayerEntity player = mc.player;
 
-        if (!cfg.enabled() || player == null || mc.world == null || mc.interactionManager == null) {
+        // TỐI ƯU GUI: Tắt Triggerbot ngay lập tức khi mở Inventory, Chat, Chest hoặc bất kỳ Menu nào (mc.currentScreen != null)
+        if (!cfg.enabled() || player == null || mc.world == null || mc.interactionManager == null || mc.currentScreen != null) {
             resetState();
             return;
         }
@@ -60,7 +62,7 @@ public final class Triggerbot {
             needWTapReset = false;
         }
 
-        // ANTI-CHEAT: Không bao giờ đánh khi đang ăn táo, uống thuốc, hoặc giơ khiên
+        // ANTI-CHEAT: Không đánh khi đang ăn táo, uống thuốc, hoặc giơ khiên
         if (player.isUsingItem()) {
             return;
         }
@@ -89,10 +91,17 @@ public final class Triggerbot {
         }
 
         // ANTI-CHEAT: Randomize Cooldown (0.93f - 0.99f)
-        // Giả lập sai số phản xạ của con người, không phải lúc nào cũng click ở đúng 1 tick cố định
         float humanizedCooldownThreshold = 0.93f + (random.nextFloat() * 0.06f);
         float cooldown = player.getAttackCooldownProgress(0.0f);
         if (cooldown < humanizedCooldownThreshold) {
+            return;
+        }
+
+        // ANTI-CHEAT: Tỷ lệ cố tình đánh trượt / hụt nhịp ngẫu nhiên (~8% cơ hội)
+        // Khi kích hoạt: Chỉ vung tay ra gió (swingHand) chứ không gọi doAttack(), giả lập bấm lệch tay của người thật
+        if (random.nextInt(100) < 8) {
+            player.swingHand(Hand.MAIN_HAND);
+            pauseUntilTime = currentTime + (120 + random.nextInt(100)); // Delay nhẹ 120-220ms giả lập miss hit
             return;
         }
 
@@ -105,7 +114,6 @@ public final class Triggerbot {
         hitCount++;
 
         if (hitCount >= targetHitsToPause) {
-            // ANTI-CHEAT: Độ trễ ngẫu nhiên mô phỏng việc khựng tay hoặc di chuyển chuột lại
             pauseUntilTime = currentTime + (100 + random.nextInt(120)); // Nghỉ 100ms - 220ms
             hitCount = 0;
             targetHitsToPause = getRandomPauseThreshold();
@@ -127,7 +135,7 @@ public final class Triggerbot {
             if (mc.interactionManager != null && mc.crosshairTarget instanceof EntityHitResult entityHit) {
                 mc.interactionManager.attackEntity(mc.player, entityHit.getEntity());
                 if (mc.player != null) {
-                    mc.player.swingHand(net.minecraft.util.Hand.MAIN_HAND);
+                    mc.player.swingHand(Hand.MAIN_HAND);
                 }
             }
         }
