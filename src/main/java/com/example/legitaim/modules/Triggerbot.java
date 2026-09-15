@@ -60,6 +60,11 @@ public final class Triggerbot {
             needWTapReset = false;
         }
 
+        // ANTI-CHEAT: Không bao giờ đánh khi đang ăn táo, uống thuốc, hoặc giơ khiên
+        if (player.isUsingItem()) {
+            return;
+        }
+
         ItemStack mainHandStack = player.getMainHandStack();
         boolean isWeapon = mainHandStack.getItem() instanceof SwordItem
                         || mainHandStack.getItem() instanceof AxeItem;
@@ -68,8 +73,6 @@ public final class Triggerbot {
             return;
         }
 
-        // TỐI ƯU REACH: Sử dụng trực tiếp hệ thống Raycast gốc của Minecraft.
-        // Chỉ cần Entity nằm trong crosshairTarget (chuẩn bounding box và góc ngắm) là cho phép đánh.
         HitResult hit = mc.crosshairTarget;
         if (hit == null || hit.getType() != HitResult.Type.ENTITY) {
             return;
@@ -85,13 +88,14 @@ public final class Triggerbot {
             return;
         }
 
-        // TỐI ƯU COOLDOWN: Đảm bảo đánh đúng nhịp (0.92f - 1.0f) không bị delay thêm tick nào.
+        // ANTI-CHEAT: Randomize Cooldown (0.93f - 0.99f)
+        // Giả lập sai số phản xạ của con người, không phải lúc nào cũng click ở đúng 1 tick cố định
+        float humanizedCooldownThreshold = 0.93f + (random.nextFloat() * 0.06f);
         float cooldown = player.getAttackCooldownProgress(0.0f);
-        if (cooldown < 0.95f) { // 0.95f để đảm bảo max sát thương và knockback
+        if (cooldown < humanizedCooldownThreshold) {
             return;
         }
 
-        // TUNG ĐÒN NGAY LẬP TỨC (Không cần kiểm tra targetEnterTime hay angleDelta)
         if (player.isOnGround() && player.isSprinting()) {
             player.setSprinting(false);
             needWTapReset = true;
@@ -100,16 +104,16 @@ public final class Triggerbot {
         invokeDoAttack();
         hitCount++;
 
-        // Nghỉ 1 nhịp siêu ngắn sau 6-9 hits để làm mới chuỗi combo
         if (hitCount >= targetHitsToPause) {
-            pauseUntilTime = currentTime + (80 + random.nextInt(70)); // Nghỉ 80ms - 150ms
+            // ANTI-CHEAT: Độ trễ ngẫu nhiên mô phỏng việc khựng tay hoặc di chuyển chuột lại
+            pauseUntilTime = currentTime + (100 + random.nextInt(120)); // Nghỉ 100ms - 220ms
             hitCount = 0;
             targetHitsToPause = getRandomPauseThreshold();
         }
     }
 
     private static int getRandomPauseThreshold() {
-        return 6 + random.nextInt(4); // 6 đến 9 đòn
+        return 5 + random.nextInt(5); // 5 đến 9 đòn
     }
 
     private static void invokeDoAttack() {
