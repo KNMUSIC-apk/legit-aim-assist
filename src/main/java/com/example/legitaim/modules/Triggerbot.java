@@ -11,12 +11,36 @@ import net.minecraft.item.SwordItem;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
 
+import java.lang.reflect.Method;
 import java.util.Random;
 
 public final class Triggerbot {
 
     private static final MinecraftClient mc = MinecraftClient.getInstance();
     private static final Random random = new Random();
+
+    // Cache lại Reflection Method để tối ưu hiệu năng (không phải find method liên tục mỗi tick)
+    private static Method doAttackMethod = null;
+
+    static {
+        try {
+            // Tìm method doAttack trong MinecraftClient
+            doAttackMethod = MinecraftClient.class.getDeclaredMethod("doAttack");
+            doAttackMethod.setAccessible(true);
+        } catch (NoSuchMethodException e) {
+            // Trường hợp chạy ở môi trường Obfuscated (Intermediary/Named mappings)
+            for (Method method : MinecraftClient.class.getDeclaredMethods()) {
+                if (method.getReturnType() == void.class && method.getParameterCount() == 0) {
+                    // Trong Fabric Yarn mapping tên thường là doAttack, nếu dùng intermediary có thể là method_1536
+                    if (method.getName().equals("doAttack") || method.getName().equals("method_1536")) {
+                        doAttackMethod = method;
+                        doAttackMethod.setAccessible(true);
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     // ============================================================
     // 1. WEAPON FILTER
@@ -176,15 +200,8 @@ public final class Triggerbot {
         }
 
         // ============================================================
-        // PRIMARY ATTACK SIMULATION (doAttack)
+        // PRIMARY ATTACK SIMULATION (invoke doAttack via Reflection)
         // ============================================================
-        // Dùng mc.doAttack() thay vì interactionManager.attackEntity()
-        // → đi đúng luồng input gốc của Minecraft, không bị desync.
-        // mc.doAttack() tự xử lý:
-        //   - attackEntity
-        //   - swingHand
-        //   - packet gửi server
-        //   - cooldown reset
         if (mc.crosshairTarget != null
                 && mc.crosshairTarget.getType() == HitResult.Type.ENTITY) {
 
@@ -195,11 +212,29 @@ public final class Triggerbot {
                 wTapTicks = W_TAP_COOLDOWN_TICKS;
             }
 
-            // Gọi doAttack - cách chuẩn nhất
-            mc.doAttack();
+            // Gọi doAttack qua Reflection (Bypass private access control)
+            invokeDoAttack();
 
             // Reset timer cho cú tiếp theo (nhưng không delay lâu)
             targetEnterTime = currentTime;
+        }
+    }
+
+    private static void invokeDoAttack() {
+        if (doAttackMethod != null) {
+            try {
+                doAttackMethod.invoke(mc);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        } else {
+            // Fallback phòng trường hợp Reflection không lấy được method
+            if (mc.interactionManager != null && mc.crosshairTarget instanceof EntityHitResult entityHit) {
+                mc.interactionManager.attackEntity(mc.player, entityHit.getEntity());
+                if (mc.player != null) {
+                    mc.player.swingHand(net.minecraft.util.Hand.MAIN_HAND);
+                }
+            }
         }
     }
 
