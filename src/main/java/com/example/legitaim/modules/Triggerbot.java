@@ -8,15 +8,22 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.AxeItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.SwordItem;
+import net.minecraft.util.Hand;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
+
+import java.util.Random;
 
 public final class Triggerbot {
 
     private static final MinecraftClient mc = MinecraftClient.getInstance();
-
-    // Giới hạn tầm đánh tối đa chuẩn Vanilla (3.0 khối). Đánh mọi khoảng cách từ 0.0m -> 3.0m.
-    private static final double MAX_ATTACK_RANGE = 3.0D;
+    private static final Random random = new Random();
+    
+    // Tầm đánh an toàn để bypass Anticheat check reach post-packet
+    private static final double MAX_ATTACK_RANGE = 2.95D; 
+    
+    // Biến đếm delay ngẫu nhiên giữa các đòn đánh
+    private static int attackDelayTicks = 0;
 
     private Triggerbot() {}
 
@@ -25,6 +32,12 @@ public final class Triggerbot {
         ClientPlayerEntity player = mc.player;
 
         if (!cfg.enabled() || player == null || mc.world == null || mc.interactionManager == null) {
+            return;
+        }
+
+        // Đếm lùi delay ngẫu nhiên nếu có
+        if (attackDelayTicks > 0) {
+            attackDelayTicks--;
             return;
         }
 
@@ -49,16 +62,20 @@ public final class Triggerbot {
             return;
         }
 
-        // 3. Đánh trong mọi khoảng cách từ 0m đến 3.0m (Không bỏ sót khi đối thủ áp sát < 2.7m)
+        // 3. Giới hạn khoảng cách an toàn (2.95m) tránh lệch vị trí giữa Client và Server
         double distance = player.distanceTo(target);
         if (distance > MAX_ATTACK_RANGE) {
             return;
         }
 
-        // 4. Đạt 95% Cooldown là vung đòn ngay
-        if (player.getAttackCooldownProgress(0.0f) >= 0.95f) {
+        // 4. Phải đạt đủ 100% Cooldown (1.0f) mới tấn công để tránh check Post-Attack Cooldown
+        if (player.getAttackCooldownProgress(0.5f) >= 1.0f) {
+            // Thực hiện vung tay và gửi packet đánh chuẩn thứ tự Vanilla
+            player.swingHand(Hand.MAIN_HAND);
             mc.interactionManager.attackEntity(player, target);
-            player.swingHand(player.getActiveHand());
+
+            // Thêm ngẫu nhiên 0 đến 1 tick delay cho đòn đánh tiếp theo để giả lập phản xạ người chơi
+            attackDelayTicks = random.nextInt(2); 
         }
     }
 }
