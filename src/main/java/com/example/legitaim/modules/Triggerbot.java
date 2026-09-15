@@ -30,7 +30,7 @@ public final class Triggerbot {
     // Chỉ tung đòn khi khoảng cách nằm trong "sweet spot" của reach.
     // - Dưới 2.5m  : đối thủ đã áp sát → không đánh vội, ưu tiên W-tap
     // - 2.75-3.0m : vùng lý tưởng → đánh để out-range
-    // - Trên 3.0m  : quá xa, không với tới
+    // - Trên 3.0m  : quá xa không với tới
     private static final double MIN_REACH = 2.75D;
     private static final double MAX_REACH = 3.0D;
 
