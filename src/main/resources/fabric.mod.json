@@ -6,6 +6,7 @@
   "description": "Legit Aim Assist + Hitbox ESP + Triggerbot cho PvP 1.21.1.",
   "authors": [ "You" ],
   "license": "MIT",
+  "icon": "assets/legitaim/icon.png",
   "environment": "client",
   "entrypoints": {
     "client": [
