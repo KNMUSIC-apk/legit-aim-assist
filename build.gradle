@@ -10,11 +10,6 @@ base {
     archivesName = project.archives_base_name
 }
 
-// Bổ sung khối loom để nhận diện Access Widener
-loom {
-    accessWidenerPath = file("src/main/resources/legitaim.accesswidener")
-}
-
 repositories {
     mavenCentral()
 }
@@ -46,6 +41,6 @@ java {
 
 jar {
     from("LICENSE") {
-        rename { "${it}_${project.archivesBaseName}" }
+        rename { "${it}_${project.base.archivesName.get()}" }
     }
 }
