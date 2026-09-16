@@ -44,9 +44,6 @@ public final class Triggerbot {
     
     private static int originalSwordSlot = -1;
     private static int lostTargetTicks = 0;
-    
-    // Cờ trạng thái: Đã rút Rìu thì phải chém xong mới được cất
-    private static boolean isBreakingShield = false; 
 
     private Triggerbot() {}
 
@@ -77,47 +74,6 @@ public final class Triggerbot {
 
         lostTargetTicks = 0;
 
-        // ============================================================
-        // AUTO-AXE SHIELD BREAKER (Fixed: Commit Strike)
-        // ============================================================
-        boolean targetIsBlocking = target.isBlocking();
-        int currentSlot = player.getInventory().selectedSlot;
-
-        // 1. Kích hoạt phá khiên: Nếu đang cầm kiếm và mục tiêu đỡ đòn, lập tức rút rìu
-        if (targetIsBlocking && !isBreakingShield) {
-            if (player.getMainHandStack().getItem() instanceof SwordItem) {
-                int axeSlot = findAxeSlot(player);
-                if (axeSlot != -1 && axeSlot != currentSlot) {
-                    originalSwordSlot = currentSlot;
-                    player.getInventory().selectedSlot = axeSlot;
-                    isBreakingShield = true; // Bật cờ cam kết chém rìu
-                    return; 
-                }
-            }
-        }
-
-        // 2. Thu rìu về: Chỉ được đổi lại Kiếm nếu ĐÃ CHÉM XONG rìu (!isBreakingShield) và mục tiêu đã hạ khiên
-        if (!isBreakingShield && originalSwordSlot != -1 && !targetIsBlocking) {
-            if (player.getMainHandStack().getItem() instanceof AxeItem) {
-                player.getInventory().selectedSlot = originalSwordSlot;
-            }
-            originalSwordSlot = -1;
-            return;
-        }
-
-        // Nếu người chơi tự cuộn chuột sang vũ khí khác, hủy bộ đếm
-        if (originalSwordSlot != -1 && !(player.getMainHandStack().getItem() instanceof AxeItem)) {
-            originalSwordSlot = -1;
-            isBreakingShield = false;
-        }
-
-        ItemStack mainHandStack = player.getMainHandStack();
-        boolean isWeapon = mainHandStack.getItem() instanceof SwordItem
-                        || mainHandStack.getItem() instanceof AxeItem;
-        if (!isWeapon) {
-            return; 
-        }
-
         long currentTime = System.currentTimeMillis();
         if (currentTime < pauseUntilTime) {
             return;
@@ -125,29 +81,73 @@ public final class Triggerbot {
 
         float humanizedCooldownThreshold = 0.93f + (random.nextFloat() * 0.06f);
         float cooldown = player.getAttackCooldownProgress(0.0f);
-        if (cooldown < humanizedCooldownThreshold) {
-            return; // Đang chờ hồi chiêu (của Kiếm hoặc Rìu)
+        
+        boolean targetIsBlocking = target.isBlocking();
+        int currentSlot = player.getInventory().selectedSlot;
+        ItemStack mainHandStack = player.getMainHandStack();
+
+        // ============================================================
+        // TRICK MỚI: FAST-SWAP SHIELD BREAKER (KIẾM -> ĐÁNH -> RÌU)
+        // ============================================================
+        if (targetIsBlocking) {
+            if (mainHandStack.getItem() instanceof SwordItem) {
+                int axeSlot = findAxeSlot(player);
+                if (axeSlot != -1) {
+                    // 1. Chỉ thực hiện khi thanh Kiếm đã hồi đủ (nhanh hơn Rìu rất nhiều)
+                    if (cooldown >= humanizedCooldownThreshold) {
+                        // 2. Click chém bằng Kiếm
+                        invokeDoAttack();
+                        hitCount++;
+                        
+                        // 3. Swap sang Rìu ngay lập tức trong cùng 1 tick
+                        originalSwordSlot = currentSlot;
+                        player.getInventory().selectedSlot = axeSlot;
+                        
+                        // 4. Nghỉ một nhịp nhẹ sau pha xử lý
+                        pauseUntilTime = currentTime + (150 + random.nextInt(100));
+                        return; 
+                    } else {
+                        return; // Chờ Kiếm nạp chiêu (không được chém bừa)
+                    }
+                }
+            }
+        } else {
+            // Khi khiên đối thủ bị vỡ (bất hoạt), tự động thu Rìu về lại Kiếm
+            if (originalSwordSlot != -1) {
+                if (player.getMainHandStack().getItem() instanceof AxeItem) {
+                    player.getInventory().selectedSlot = originalSwordSlot;
+                }
+                originalSwordSlot = -1;
+                // Có thể cho cooldown hồi lại để bắt đầu chuỗi combo mới
+                return;
+            }
         }
 
-        // Chỉ áp dụng tỷ lệ Miss 8% cho những đòn chém Kiếm thông thường.
-        // Bỏ qua Miss Chance nếu đang thực hiện đòn đập Rìu phá khiên để đảm bảo luôn trúng.
-        if (!isBreakingShield && random.nextInt(100) < 8) {
+        // Tự do chuyển vũ khí bằng tay (chống lỗi kẹt slot)
+        if (originalSwordSlot != -1 && !(player.getMainHandStack().getItem() instanceof AxeItem)) {
+            originalSwordSlot = -1;
+        }
+
+        // CHUỖI COMBO THÔNG THƯỜNG
+        boolean isWeapon = mainHandStack.getItem() instanceof SwordItem
+                        || mainHandStack.getItem() instanceof AxeItem;
+        if (!isWeapon) {
+            return; 
+        }
+
+        if (cooldown < humanizedCooldownThreshold) {
+            return;
+        }
+
+        // Tỷ lệ vung hụt 8% (Chỉ áp dụng khi đánh thường, KHÔNG áp dụng khi đang xài Trick phá khiên)
+        if (random.nextInt(100) < 8) {
             player.swingHand(Hand.MAIN_HAND);
             pauseUntilTime = currentTime + (120 + random.nextInt(100));
             return;
         }
 
-        // TUNG ĐÒN ĐÁNH
         invokeDoAttack();
         hitCount++;
-
-        // Nếu đòn vừa tung ra là đòn Rìu phá khiên, tắt cờ cam kết để tick sau thu vũ khí về Kiếm
-        if (isBreakingShield && mainHandStack.getItem() instanceof AxeItem) {
-            isBreakingShield = false;
-            // Tạo độ trễ nghỉ tay nhỉnh hơn một chút sau khi đập rìu nặng (giả lập phản xạ con người)
-            pauseUntilTime = currentTime + (150 + random.nextInt(100));
-            return;
-        }
 
         if (hitCount >= targetHitsToPause) {
             pauseUntilTime = currentTime + (100 + random.nextInt(120));
@@ -182,7 +182,6 @@ public final class Triggerbot {
             }
             originalSwordSlot = -1;
         }
-        isBreakingShield = false;
     }
 
     private static int getRandomPauseThreshold() {
