@@ -41,7 +41,9 @@ public final class Triggerbot {
     private static int hitCount = 0;
     private static int targetHitsToPause = getRandomPauseThreshold();
     private static long pauseUntilTime = 0L;
-    private static boolean needWTapReset = false;
+    
+    private static int originalSwordSlot = -1;
+    private static int lostTargetTicks = 0; // Bộ đếm chống kẹt slot
 
     private Triggerbot() {}
 
@@ -49,40 +51,65 @@ public final class Triggerbot {
         ModConfig.TriggerSnapshot cfg = ModConfig.snapshotTrigger();
         ClientPlayerEntity player = mc.player;
 
-        // TỐI ƯU GUI: Tắt Triggerbot ngay lập tức khi mở Inventory, Chat, Chest hoặc bất kỳ Menu nào (mc.currentScreen != null)
         if (!cfg.enabled() || player == null || mc.world == null || mc.interactionManager == null || mc.currentScreen != null) {
-            resetState();
+            resetState(player);
             return;
         }
 
-        if (needWTapReset) {
-            if (player.isOnGround() && mc.options.forwardKey.isPressed()) {
-                player.setSprinting(true);
-            }
-            needWTapReset = false;
-        }
-
-        // ANTI-CHEAT: Không đánh khi đang ăn táo, uống thuốc, hoặc giơ khiên
         if (player.isUsingItem()) {
             return;
+        }
+
+        HitResult hit = mc.crosshairTarget;
+        if (hit == null || hit.getType() != HitResult.Type.ENTITY) {
+            handleLostTarget(player);
+            return;
+        }
+
+        Entity entity = ((EntityHitResult) hit).getEntity();
+        if (!(entity instanceof PlayerEntity target) || !target.isAlive() || target.isSpectator() || target.isCreative() || target.isRemoved()) {
+            handleLostTarget(player);
+            return;
+        }
+
+        // Đã tìm thấy mục tiêu hợp lệ, reset bộ đếm mất mục tiêu
+        lostTargetTicks = 0;
+
+        // ============================================================
+        // AUTO-AXE SHIELD BREAKER (Safe Mode)
+        // ============================================================
+        boolean targetIsBlocking = target.isBlocking();
+        int currentSlot = player.getInventory().selectedSlot;
+
+        if (targetIsBlocking) {
+            if (player.getMainHandStack().getItem() instanceof SwordItem) {
+                int axeSlot = findAxeSlot(player);
+                if (axeSlot != -1 && axeSlot != currentSlot) {
+                    originalSwordSlot = currentSlot;
+                    player.getInventory().selectedSlot = axeSlot;
+                    return; 
+                }
+            }
+        } else {
+            if (originalSwordSlot != -1) {
+                if (player.getMainHandStack().getItem() instanceof AxeItem) {
+                    player.getInventory().selectedSlot = originalSwordSlot;
+                }
+                originalSwordSlot = -1;
+                return;
+            }
+        }
+
+        // Người chơi tự lăn chuột sang vũ khí khác -> Hủy lưu slot
+        if (originalSwordSlot != -1 && !(player.getMainHandStack().getItem() instanceof AxeItem)) {
+            originalSwordSlot = -1;
         }
 
         ItemStack mainHandStack = player.getMainHandStack();
         boolean isWeapon = mainHandStack.getItem() instanceof SwordItem
                         || mainHandStack.getItem() instanceof AxeItem;
         if (!isWeapon) {
-            resetState();
-            return;
-        }
-
-        HitResult hit = mc.crosshairTarget;
-        if (hit == null || hit.getType() != HitResult.Type.ENTITY) {
-            return;
-        }
-
-        Entity entity = ((EntityHitResult) hit).getEntity();
-        if (!(entity instanceof PlayerEntity target) || !target.isAlive() || target.isSpectator() || target.isRemoved()) {
-            return;
+            return; 
         }
 
         long currentTime = System.currentTimeMillis();
@@ -90,38 +117,60 @@ public final class Triggerbot {
             return;
         }
 
-        // ANTI-CHEAT: Randomize Cooldown (0.93f - 0.99f)
         float humanizedCooldownThreshold = 0.93f + (random.nextFloat() * 0.06f);
         float cooldown = player.getAttackCooldownProgress(0.0f);
         if (cooldown < humanizedCooldownThreshold) {
             return;
         }
 
-        // ANTI-CHEAT: Tỷ lệ cố tình đánh trượt / hụt nhịp ngẫu nhiên (~8% cơ hội)
-        // Khi kích hoạt: Chỉ vung tay ra gió (swingHand) chứ không gọi doAttack(), giả lập bấm lệch tay của người thật
+        // 8% Miss Chance
         if (random.nextInt(100) < 8) {
             player.swingHand(Hand.MAIN_HAND);
-            pauseUntilTime = currentTime + (120 + random.nextInt(100)); // Delay nhẹ 120-220ms giả lập miss hit
+            pauseUntilTime = currentTime + (120 + random.nextInt(100));
             return;
-        }
-
-        if (player.isOnGround() && player.isSprinting()) {
-            player.setSprinting(false);
-            needWTapReset = true;
         }
 
         invokeDoAttack();
         hitCount++;
 
         if (hitCount >= targetHitsToPause) {
-            pauseUntilTime = currentTime + (100 + random.nextInt(120)); // Nghỉ 100ms - 220ms
+            pauseUntilTime = currentTime + (100 + random.nextInt(120));
             hitCount = 0;
             targetHitsToPause = getRandomPauseThreshold();
         }
     }
 
+    private static void handleLostTarget(ClientPlayerEntity player) {
+        if (originalSwordSlot != -1) {
+            lostTargetTicks++;
+            // Nếu mất mục tiêu quá 10 ticks (0.5s), tự động trả về kiếm để tránh kẹt
+            if (lostTargetTicks > 10) {
+                resetAutoAxe(player);
+                lostTargetTicks = 0;
+            }
+        }
+    }
+
+    private static int findAxeSlot(ClientPlayerEntity player) {
+        for (int i = 0; i < 9; i++) {
+            if (player.getInventory().getStack(i).getItem() instanceof AxeItem) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static void resetAutoAxe(ClientPlayerEntity player) {
+        if (originalSwordSlot != -1) {
+            if (player != null && player.getMainHandStack().getItem() instanceof AxeItem) {
+                player.getInventory().selectedSlot = originalSwordSlot;
+            }
+            originalSwordSlot = -1;
+        }
+    }
+
     private static int getRandomPauseThreshold() {
-        return 5 + random.nextInt(5); // 5 đến 9 đòn
+        return 5 + random.nextInt(5);
     }
 
     private static void invokeDoAttack() {
@@ -141,9 +190,10 @@ public final class Triggerbot {
         }
     }
 
-    private static void resetState() {
-        needWTapReset = false;
+    private static void resetState(ClientPlayerEntity player) {
         hitCount = 0;
         pauseUntilTime = 0L;
+        lostTargetTicks = 0;
+        resetAutoAxe(player);
     }
 }
