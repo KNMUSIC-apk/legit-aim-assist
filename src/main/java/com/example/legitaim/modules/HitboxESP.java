@@ -124,8 +124,8 @@ public final class HitboxESP {
             double x2, double y2, double z2,
             float r, float g, float b, float a) {
 
-        // Đã bổ sung .normal() và .next() để fix lỗi IllegalStateException (Crash game)
-        buffer.vertex(m, (float) x1, (float) y1, (float) z1).color(r, g, b, a).normal(1.0f, 0.0f, 0.0f).next();
-        buffer.vertex(m, (float) x2, (float) y2, (float) z2).color(r, g, b, a).normal(1.0f, 0.0f, 0.0f).next();
+        // Đã xoá .next() để fix lỗi "cannot find symbol"
+        buffer.vertex(m, (float) x1, (float) y1, (float) z1).color(r, g, b, a).normal(1.0f, 0.0f, 0.0f);
+        buffer.vertex(m, (float) x2, (float) y2, (float) z2).color(r, g, b, a).normal(1.0f, 0.0f, 0.0f);
     }
 }
