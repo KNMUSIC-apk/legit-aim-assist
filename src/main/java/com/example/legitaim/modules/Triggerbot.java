@@ -43,7 +43,10 @@ public final class Triggerbot {
     private static long pauseUntilTime = 0L;
     
     private static int originalSwordSlot = -1;
-    private static int lostTargetTicks = 0; // Bộ đếm chống kẹt slot
+    private static int lostTargetTicks = 0;
+    
+    // Cờ trạng thái: Đã rút Rìu thì phải chém xong mới được cất
+    private static boolean isBreakingShield = false; 
 
     private Triggerbot() {}
 
@@ -72,37 +75,40 @@ public final class Triggerbot {
             return;
         }
 
-        // Đã tìm thấy mục tiêu hợp lệ, reset bộ đếm mất mục tiêu
         lostTargetTicks = 0;
 
         // ============================================================
-        // AUTO-AXE SHIELD BREAKER (Safe Mode)
+        // AUTO-AXE SHIELD BREAKER (Fixed: Commit Strike)
         // ============================================================
         boolean targetIsBlocking = target.isBlocking();
         int currentSlot = player.getInventory().selectedSlot;
 
-        if (targetIsBlocking) {
+        // 1. Kích hoạt phá khiên: Nếu đang cầm kiếm và mục tiêu đỡ đòn, lập tức rút rìu
+        if (targetIsBlocking && !isBreakingShield) {
             if (player.getMainHandStack().getItem() instanceof SwordItem) {
                 int axeSlot = findAxeSlot(player);
                 if (axeSlot != -1 && axeSlot != currentSlot) {
                     originalSwordSlot = currentSlot;
                     player.getInventory().selectedSlot = axeSlot;
+                    isBreakingShield = true; // Bật cờ cam kết chém rìu
                     return; 
                 }
             }
-        } else {
-            if (originalSwordSlot != -1) {
-                if (player.getMainHandStack().getItem() instanceof AxeItem) {
-                    player.getInventory().selectedSlot = originalSwordSlot;
-                }
-                originalSwordSlot = -1;
-                return;
-            }
         }
 
-        // Người chơi tự lăn chuột sang vũ khí khác -> Hủy lưu slot
+        // 2. Thu rìu về: Chỉ được đổi lại Kiếm nếu ĐÃ CHÉM XONG rìu (!isBreakingShield) và mục tiêu đã hạ khiên
+        if (!isBreakingShield && originalSwordSlot != -1 && !targetIsBlocking) {
+            if (player.getMainHandStack().getItem() instanceof AxeItem) {
+                player.getInventory().selectedSlot = originalSwordSlot;
+            }
+            originalSwordSlot = -1;
+            return;
+        }
+
+        // Nếu người chơi tự cuộn chuột sang vũ khí khác, hủy bộ đếm
         if (originalSwordSlot != -1 && !(player.getMainHandStack().getItem() instanceof AxeItem)) {
             originalSwordSlot = -1;
+            isBreakingShield = false;
         }
 
         ItemStack mainHandStack = player.getMainHandStack();
@@ -120,18 +126,28 @@ public final class Triggerbot {
         float humanizedCooldownThreshold = 0.93f + (random.nextFloat() * 0.06f);
         float cooldown = player.getAttackCooldownProgress(0.0f);
         if (cooldown < humanizedCooldownThreshold) {
-            return;
+            return; // Đang chờ hồi chiêu (của Kiếm hoặc Rìu)
         }
 
-        // 8% Miss Chance
-        if (random.nextInt(100) < 8) {
+        // Chỉ áp dụng tỷ lệ Miss 8% cho những đòn chém Kiếm thông thường.
+        // Bỏ qua Miss Chance nếu đang thực hiện đòn đập Rìu phá khiên để đảm bảo luôn trúng.
+        if (!isBreakingShield && random.nextInt(100) < 8) {
             player.swingHand(Hand.MAIN_HAND);
             pauseUntilTime = currentTime + (120 + random.nextInt(100));
             return;
         }
 
+        // TUNG ĐÒN ĐÁNH
         invokeDoAttack();
         hitCount++;
+
+        // Nếu đòn vừa tung ra là đòn Rìu phá khiên, tắt cờ cam kết để tick sau thu vũ khí về Kiếm
+        if (isBreakingShield && mainHandStack.getItem() instanceof AxeItem) {
+            isBreakingShield = false;
+            // Tạo độ trễ nghỉ tay nhỉnh hơn một chút sau khi đập rìu nặng (giả lập phản xạ con người)
+            pauseUntilTime = currentTime + (150 + random.nextInt(100));
+            return;
+        }
 
         if (hitCount >= targetHitsToPause) {
             pauseUntilTime = currentTime + (100 + random.nextInt(120));
@@ -143,7 +159,6 @@ public final class Triggerbot {
     private static void handleLostTarget(ClientPlayerEntity player) {
         if (originalSwordSlot != -1) {
             lostTargetTicks++;
-            // Nếu mất mục tiêu quá 10 ticks (0.5s), tự động trả về kiếm để tránh kẹt
             if (lostTargetTicks > 10) {
                 resetAutoAxe(player);
                 lostTargetTicks = 0;
@@ -167,6 +182,7 @@ public final class Triggerbot {
             }
             originalSwordSlot = -1;
         }
+        isBreakingShield = false;
     }
 
     private static int getRandomPauseThreshold() {
