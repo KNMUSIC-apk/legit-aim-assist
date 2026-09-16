@@ -8,6 +8,7 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.AxeItem;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.SwordItem;
+import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
@@ -41,9 +42,6 @@ public final class Triggerbot {
     private static int hitCount = 0;
     private static int targetHitsToPause = getRandomPauseThreshold();
     private static long pauseUntilTime = 0L;
-    
-    private static int originalSwordSlot = -1;
-    private static int lostTargetTicks = 0;
 
     private Triggerbot() {}
 
@@ -52,7 +50,7 @@ public final class Triggerbot {
         ClientPlayerEntity player = mc.player;
 
         if (!cfg.enabled() || player == null || mc.world == null || mc.interactionManager == null || mc.currentScreen != null) {
-            resetState(player);
+            resetState();
             return;
         }
 
@@ -62,17 +60,13 @@ public final class Triggerbot {
 
         HitResult hit = mc.crosshairTarget;
         if (hit == null || hit.getType() != HitResult.Type.ENTITY) {
-            handleLostTarget(player);
             return;
         }
 
         Entity entity = ((EntityHitResult) hit).getEntity();
         if (!(entity instanceof PlayerEntity target) || !target.isAlive() || target.isSpectator() || target.isCreative() || target.isRemoved()) {
-            handleLostTarget(player);
             return;
         }
-
-        lostTargetTicks = 0;
 
         long currentTime = System.currentTimeMillis();
         if (currentTime < pauseUntilTime) {
@@ -82,53 +76,41 @@ public final class Triggerbot {
         float humanizedCooldownThreshold = 0.93f + (random.nextFloat() * 0.06f);
         float cooldown = player.getAttackCooldownProgress(0.0f);
         
-        boolean targetIsBlocking = target.isBlocking();
-        int currentSlot = player.getInventory().selectedSlot;
         ItemStack mainHandStack = player.getMainHandStack();
+        int currentSlot = player.getInventory().selectedSlot;
+        boolean targetIsBlocking = target.isBlocking();
 
         // ============================================================
-        // TRICK MỚI: FAST-SWAP SHIELD BREAKER (KIẾM -> ĐÁNH -> RÌU)
+        // TRICK FAST-SWAP THEO VIDEO (PACKET-BASED SHIELD BREAKER)
         // ============================================================
-        if (targetIsBlocking) {
-            if (mainHandStack.getItem() instanceof SwordItem) {
-                int axeSlot = findAxeSlot(player);
-                if (axeSlot != -1) {
-                    // 1. Chỉ thực hiện khi thanh Kiếm đã hồi đủ (nhanh hơn Rìu rất nhiều)
-                    if (cooldown >= humanizedCooldownThreshold) {
-                        // 2. Click chém bằng Kiếm
-                        invokeDoAttack();
-                        hitCount++;
-                        
-                        // 3. Swap sang Rìu ngay lập tức trong cùng 1 tick
-                        originalSwordSlot = currentSlot;
-                        player.getInventory().selectedSlot = axeSlot;
-                        
-                        // 4. Nghỉ một nhịp nhẹ sau pha xử lý
-                        pauseUntilTime = currentTime + (150 + random.nextInt(100));
-                        return; 
-                    } else {
-                        return; // Chờ Kiếm nạp chiêu (không được chém bừa)
-                    }
-                }
-            }
-        } else {
-            // Khi khiên đối thủ bị vỡ (bất hoạt), tự động thu Rìu về lại Kiếm
-            if (originalSwordSlot != -1) {
-                if (player.getMainHandStack().getItem() instanceof AxeItem) {
-                    player.getInventory().selectedSlot = originalSwordSlot;
-                }
-                originalSwordSlot = -1;
-                // Có thể cho cooldown hồi lại để bắt đầu chuỗi combo mới
+        if (targetIsBlocking && mainHandStack.getItem() instanceof SwordItem) {
+            int axeSlot = findAxeSlot(player);
+            
+            // Chỉ thi triển Fast-Swap khi Kiếm đã nạp đầy chiêu
+            if (axeSlot != -1 && cooldown >= humanizedCooldownThreshold) {
+                
+                // Bước 1: ÉP GỬI GÓI TIN BÁO SERVER TA ĐÃ CẦM RÌU (Không cần chờ Vanilla tự check)
+                mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(axeSlot));
+                player.getInventory().selectedSlot = axeSlot; // Đồng bộ Client
+                
+                // Bước 2: TUNG ĐÒN ĐÁNH NGAY LẬP TỨC (Lúc này Server ghi nhận ta đang đánh bằng Rìu)
+                mc.interactionManager.attackEntity(player, target);
+                player.swingHand(Hand.MAIN_HAND);
+                
+                // Bước 3: ÉP GỬI GÓI TIN TRẢ VỀ KIẾM NGAY TRONG CÙNG 1 TICK
+                mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(currentSlot));
+                player.getInventory().selectedSlot = currentSlot; // Đồng bộ Client
+                
+                // Bước 4: Reset nhịp độ combo
+                hitCount++;
+                pauseUntilTime = currentTime + (150 + random.nextInt(100)); // Delay một nhịp tay
                 return;
             }
         }
 
-        // Tự do chuyển vũ khí bằng tay (chống lỗi kẹt slot)
-        if (originalSwordSlot != -1 && !(player.getMainHandStack().getItem() instanceof AxeItem)) {
-            originalSwordSlot = -1;
-        }
-
-        // CHUỖI COMBO THÔNG THƯỜNG
+        // ============================================================
+        // CHUỖI COMBO BÌNH THƯỜNG
+        // ============================================================
         boolean isWeapon = mainHandStack.getItem() instanceof SwordItem
                         || mainHandStack.getItem() instanceof AxeItem;
         if (!isWeapon) {
@@ -139,7 +121,7 @@ public final class Triggerbot {
             return;
         }
 
-        // Tỷ lệ vung hụt 8% (Chỉ áp dụng khi đánh thường, KHÔNG áp dụng khi đang xài Trick phá khiên)
+        // Tỷ lệ đánh hụt tự nhiên 8%
         if (random.nextInt(100) < 8) {
             player.swingHand(Hand.MAIN_HAND);
             pauseUntilTime = currentTime + (120 + random.nextInt(100));
@@ -156,16 +138,6 @@ public final class Triggerbot {
         }
     }
 
-    private static void handleLostTarget(ClientPlayerEntity player) {
-        if (originalSwordSlot != -1) {
-            lostTargetTicks++;
-            if (lostTargetTicks > 10) {
-                resetAutoAxe(player);
-                lostTargetTicks = 0;
-            }
-        }
-    }
-
     private static int findAxeSlot(ClientPlayerEntity player) {
         for (int i = 0; i < 9; i++) {
             if (player.getInventory().getStack(i).getItem() instanceof AxeItem) {
@@ -173,15 +145,6 @@ public final class Triggerbot {
             }
         }
         return -1;
-    }
-
-    private static void resetAutoAxe(ClientPlayerEntity player) {
-        if (originalSwordSlot != -1) {
-            if (player != null && player.getMainHandStack().getItem() instanceof AxeItem) {
-                player.getInventory().selectedSlot = originalSwordSlot;
-            }
-            originalSwordSlot = -1;
-        }
     }
 
     private static int getRandomPauseThreshold() {
@@ -205,10 +168,8 @@ public final class Triggerbot {
         }
     }
 
-    private static void resetState(ClientPlayerEntity player) {
+    private static void resetState() {
         hitCount = 0;
         pauseUntilTime = 0L;
-        lostTargetTicks = 0;
-        resetAutoAxe(player);
     }
 }
