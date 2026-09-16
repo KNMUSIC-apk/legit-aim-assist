@@ -30,9 +30,10 @@ public class LegitAimAssistClient implements ClientModInitializer {
     public void onInitializeClient() {
         LOGGER.info("[LegitAimAssist] Initializing...");
 
+        // Khởi tạo phím tắt
         KeyBindings.register();
 
-        // ── Toggle handlers ──
+        // ── Lắng nghe sự kiện phím tắt (Toggle handlers) ──
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             if (client.player == null) return;
 
@@ -50,13 +51,13 @@ public class LegitAimAssistClient implements ClientModInitializer {
             }
         });
 
-        // ── Gameplay tick ──
+        // ── Gameplay tick (Xử lý logic Aim & Trigger) ──
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             AimAssist.tick();
             Triggerbot.tick();
         });
 
-        // ── Render tick ──
+        // ── Render tick (Xử lý vẽ ESP lên màn hình) ──
         WorldRenderEvents.LAST.register(HitboxESP::render);
 
         LOGGER.info("[LegitAimAssist] Initialized.");
@@ -64,7 +65,7 @@ public class LegitAimAssistClient implements ClientModInitializer {
 
     private static void sendToggleMessage(String feature, boolean enabled) {
         if (mc.player == null) return;
-        String status = enabled ? "§aON" : "§cOFF";
+        String status = enabled ? "§aBẬT" : "§cCẮT";
         mc.player.sendMessage(
             Text.literal("§7[§bLegitAim§7] §f" + feature + ": " + status),
             true
