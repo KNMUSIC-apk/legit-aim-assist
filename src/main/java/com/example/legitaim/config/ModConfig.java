@@ -2,8 +2,7 @@ package com.example.legitaim.config;
 
 /**
  * Thread-safe config.
- * - volatile: đồng bộ giữa tick thread và render thread (đặc biệt quan trọng
- *   trên Apple Silicon / ARM).
+ * - volatile: đồng bộ giữa tick thread và render thread (đặc biệt quan trọng trên Apple Silicon / ARM).
  * - snapshot: lấy giá trị nhất quán tại một thời điểm.
  */
 public final class ModConfig {
