@@ -1,153 +1,100 @@
 package com.example.legitaim.modules;
 
 import com.example.legitaim.config.ModConfig;
-import com.example.legitaim.util.RotationUtils;
-import com.example.legitaim.util.TargetUtils;
+import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
-import net.minecraft.client.network.ClientPlayerEntity;
+import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 
+import java.util.Comparator;
+import java.util.List;
 import java.util.Optional;
 
-public final class AimAssist {
+public class AimAssist {
 
     private static final MinecraftClient mc = MinecraftClient.getInstance();
 
-    private static AbstractClientPlayerEntity currentTarget = null;
-    private static int tickCounter = 0;
-    private static float disengageFactor = 0.0f;
-    private static float lastYawDelta   = 0.0f;
-    private static float lastPitchDelta = 0.0f;
-    private static final float[] ANGLE_OUT = new float[2];
-
-    private static float prevPlayerYaw = 0.0f;
-    private static float prevPlayerPitch = 0.0f;
-
-    private AimAssist() {}
-
-    public static void tick() {
+    // Gọi hàm này bên trong WorldRenderEvents.START hoặc WorldRenderEvents.BEFORE_ENTITIES
+    public static void onRender(WorldRenderContext context) {
         ModConfig.AimSnapshot cfg = ModConfig.snapshotAim();
-        ClientPlayerEntity player = mc.player;
+        if (!cfg.enabled() || mc.player == null || mc.world == null) return;
 
-        if (!cfg.enabled() || player == null || mc.world == null) {
-            smoothlyDisengage(player);
-            return;
-        }
+        // Chỉ chạy khi không mở Menu/Inventory
+        if (mc.currentScreen != null) return;
 
-        tickCounter++;
-
-        Vec3d eyePos = player.getEyePos();
-        Vec3d lookVec = player.getRotationVec(1.0f);
-
-        Optional<AbstractClientPlayerEntity> targetOpt = TargetUtils.findTarget(
-            cfg.reach(), cfg.fov(), eyePos, lookVec
-        );
-
-        if (targetOpt.isEmpty() || targetOpt.get().isCreative() || targetOpt.get().isSpectator()) {
-            smoothlyDisengage(player);
-            prevPlayerYaw = player.getYaw();
-            prevPlayerPitch = player.getPitch();
-            return;
-        }
-
-        AbstractClientPlayerEntity target = targetOpt.get();
-        currentTarget = target;
-        
-        disengageFactor = Math.min(1.0f, disengageFactor + 0.45f);
-
-        Vec3d targetPos = target.getPos();
-        Vec3d targetVel = target.getVelocity();
-
-        double targetY = targetPos.y + (target.getHeight() * 0.45D);
-        double targetX = targetPos.x;
-        double targetZ = targetPos.z;
-
-        if (!target.isOnGround()) {
-            targetY += (targetVel.y * 1.15D);
-            targetX += (targetVel.x * 1.30D);
-            targetZ += (targetVel.z * 1.30D);
-        } else {
-            double swayAmount = 0.05D; 
-            targetX += Math.cos(tickCounter * 0.3) * swayAmount;
-            targetZ += Math.sin(tickCounter * 0.3) * swayAmount;
-            
-            targetX += (targetVel.x * 1.05D);
-            targetZ += (targetVel.z * 1.05D);
-        }
-
-        RotationUtils.calculateAngles(
-            eyePos.x, eyePos.y, eyePos.z,
-            targetX, targetY, targetZ,
-            ANGLE_OUT
-        );
-
-        float userYawMovement = Math.abs(player.getYaw() - prevPlayerYaw);
-        float userPitchMovement = Math.abs(player.getPitch() - prevPlayerPitch);
-        
-        float mouseInterferenceMultiplier = 1.0f;
-        // Bổ sung Deadzone (0.5f) để lọc các thao tác rung tay nhỏ, chỉ kích hoạt khi thực sự vuốt/vẩy mạnh
-        if (userYawMovement > 3.0f || userPitchMovement > 3.0f) {
-            mouseInterferenceMultiplier = 0.65f; 
-        } else if (userYawMovement > 0.5f || userPitchMovement > 0.5f) {
-            mouseInterferenceMultiplier = 0.85f; // Trợ lực nhẹ khi di chuyển chậm
-        }
-
-        float effectiveSpeed = cfg.speed() * 1.35f * disengageFactor * mouseInterferenceMultiplier;
-
-        float[] result = RotationUtils.smoothRotation(
-            player.getYaw(), player.getPitch(),
-            ANGLE_OUT[0], ANGLE_OUT[1],
-            effectiveSpeed,
-            cfg.jitter() * (mouseInterferenceMultiplier == 1.0f ? 1.0f : 0.5f),
-            cfg.maxYawPerTick(),
-            cfg.maxPitchPerTick()
-        );
-
-        lastYawDelta   = wrapDegrees(result[0] - player.getYaw());
-        lastPitchDelta = result[1] - player.getPitch();
-
-        player.setYaw(result[0]);
-        player.setPitch(result[1]);
-
-        prevPlayerYaw = player.getYaw();
-        prevPlayerPitch = player.getPitch();
-    }
-
-    private static void smoothlyDisengage(ClientPlayerEntity player) {
-        if (player == null) {
-            currentTarget = null;
-            disengageFactor = 0.0f;
-            lastYawDelta = 0.0f;
-            lastPitchDelta = 0.0f;
-            RotationUtils.resetJitter();
-            return;
-        }
-        if (disengageFactor > 0.0f) {
-            disengageFactor = Math.max(0.0f, disengageFactor - 0.25f);
-            float decay = disengageFactor * 0.5f;
-            
-            player.setYaw(player.getYaw() + lastYawDelta * decay);
-            player.setPitch(player.getPitch() + lastPitchDelta * decay);
-
-            lastYawDelta   *= 0.50f;
-            lastPitchDelta *= 0.50f;
-        } else {
-            currentTarget = null;
-            lastYawDelta = 0.0f;
-            lastPitchDelta = 0.0f;
-            RotationUtils.resetJitter();
+        AbstractClientPlayerEntity target = findBestTarget(cfg.reach(), cfg.fov());
+        if (target != null) {
+            // Lấy tickDelta để đồng bộ tốc độ quay theo FPS thực tế của màn hình
+            float tickDelta = context.tickCounter().getTickDelta(true);
+            aimAt(target, cfg, tickDelta);
         }
     }
 
-    public static AbstractClientPlayerEntity getCurrentTarget() {
-        return currentTarget;
+    private static void aimAt(AbstractClientPlayerEntity target, ModConfig.AimSnapshot cfg, float tickDelta) {
+        if (mc.player == null) return;
+
+        // Nội suy vị trí thực tế của mục tiêu theo Frame để tránh giật khi nhảy
+        double targetX = MathHelper.lerp(tickDelta, target.lastRenderX, target.getX());
+        double targetY = MathHelper.lerp(tickDelta, target.lastRenderY, target.getY()) + (target.getHeight() * 0.65);
+        double targetZ = MathHelper.lerp(tickDelta, target.lastRenderZ, target.getZ());
+
+        // Mắt người chơi theo thời gian thực (Render Position)
+        Vec3d eyePos = mc.player.getCameraPosVec(tickDelta);
+
+        double diffX = targetX - eyePos.x;
+        double diffY = targetY - eyePos.y;
+        double diffZ = targetZ - eyePos.z;
+        double dist = Math.sqrt(diffX * diffX + diffZ * diffZ);
+
+        float idealYaw = (float) Math.toDegrees(Math.atan2(diffZ, diffX)) - 90.0F;
+        float idealPitch = (float) -Math.toDegrees(Math.atan2(diffY, dist));
+
+        float yawDiff = MathHelper.wrapDegrees(idealYaw - mc.player.getYaw());
+        float pitchDiff = MathHelper.wrapDegrees(idealPitch - mc.player.getPitch());
+
+        // Deadzone chống rung nhỏ
+        if (Math.abs(yawDiff) < 0.3f && Math.abs(pitchDiff) < 0.3f) {
+            return;
+        }
+
+        // Tính toán độ mượt dựa theo hệ số Render Frame
+        float smoothFactor = Math.max(1.0f, (20.0f - cfg.speed()) * 0.8f);
+        float stepYaw = (yawDiff / smoothFactor) * tickDelta;
+        float stepPitch = (pitchDiff / smoothFactor) * tickDelta;
+
+        // Giới hạn gia tốc quay
+        stepYaw = MathHelper.clamp(stepYaw, -cfg.maxYawPerTick(), cfg.maxYawPerTick());
+        stepPitch = MathHelper.clamp(stepPitch, -cfg.maxPitchPerTick(), cfg.maxPitchPerTick());
+
+        // Áp dụng trực tiếp vào góc quay người chơi
+        mc.player.setYaw(mc.player.getYaw() + stepYaw);
+        mc.player.setPitch(mc.player.getPitch() + stepPitch);
     }
 
-    private static float wrapDegrees(float deg) {
-        deg = deg % 360.0f;
-        if (deg >= 180.0f)  deg -= 360.0f;
-        if (deg < -180.0f)  deg += 360.0f;
-        return deg;
+    private static AbstractClientPlayerEntity findBestTarget(double maxReach, double maxFov) {
+        if (mc.world == null || mc.player == null) return null;
+
+        List<AbstractClientPlayerEntity> players = mc.world.getPlayers();
+
+        Optional<AbstractClientPlayerEntity> bestTarget = players.stream()
+            .filter(p -> p != mc.player)
+            .filter(AbstractClientPlayerEntity::isAlive)
+            .filter(p -> !p.isSpectator())
+            .filter(p -> mc.player.distanceTo(p) <= maxReach)
+            .filter(p -> getAngleDifference(p) <= maxFov)
+            .min(Comparator.comparingDouble(AimAssist::getAngleDifference));
+
+        return bestTarget.orElse(null);
+    }
+
+    private static double getAngleDifference(AbstractClientPlayerEntity target) {
+        if (mc.player == null) return 999.0;
+
+        double diffX = target.getX() - mc.player.getX();
+        double diffZ = target.getZ() - mc.player.getZ();
+        float yaw = (float) Math.toDegrees(Math.atan2(diffZ, diffX)) - 90.0F;
+
+        return Math.abs(MathHelper.wrapDegrees(yaw - mc.player.getYaw()));
     }
 }
