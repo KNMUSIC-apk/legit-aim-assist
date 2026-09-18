@@ -13,12 +13,6 @@ import net.minecraft.text.Text;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * Client entrypoint.
- * - Tick logic: client thread (via END_CLIENT_TICK)
- * - Render logic: render thread (via WorldRenderEvents.LAST)
- * - Config: volatile + snapshot để thread-safe
- */
 public class LegitAimAssistClient implements ClientModInitializer {
 
     public static final String MOD_ID = "legitaim";
@@ -51,13 +45,13 @@ public class LegitAimAssistClient implements ClientModInitializer {
             }
         });
 
-        // ── Gameplay tick (Xử lý logic Aim & Trigger) ──
+        // ── Gameplay tick (Xử lý Triggerbot) ──
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            AimAssist.tick();
             Triggerbot.tick();
         });
 
-        // ── Render tick (Xử lý vẽ ESP lên màn hình) ──
+        // ── Render tick (Xử lý AimAssist mượt + Vẽ ESP) ──
+        WorldRenderEvents.START.register(AimAssist::onRender);
         WorldRenderEvents.LAST.register(HitboxESP::render);
 
         LOGGER.info("[LegitAimAssist] Initialized.");
