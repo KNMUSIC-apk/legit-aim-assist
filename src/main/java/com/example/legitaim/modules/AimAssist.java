@@ -4,10 +4,10 @@ import com.example.legitaim.config.ModConfig;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
-import net.minecraft.entity.RaycastContext;
 import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.RaycastContext; // Đã sửa đường dẫn import tại đây
 
 import java.util.Comparator;
 import java.util.List;
