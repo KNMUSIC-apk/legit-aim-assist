@@ -4,29 +4,30 @@ import com.example.legitaim.config.ModConfig;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.AbstractClientPlayerEntity;
+import net.minecraft.entity.RaycastContext;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.util.math.Vec3d;
 
 import java.util.Comparator;
 import java.util.List;
-import java.util.Optional;
 
 public class AimAssist {
 
     private static final MinecraftClient mc = MinecraftClient.getInstance();
 
-    // Gọi hàm này bên trong WorldRenderEvents.START hoặc WorldRenderEvents.BEFORE_ENTITIES
     public static void onRender(WorldRenderContext context) {
         ModConfig.AimSnapshot cfg = ModConfig.snapshotAim();
         if (!cfg.enabled() || mc.player == null || mc.world == null) return;
 
-        // Chỉ chạy khi không mở Menu/Inventory
+        // Bỏ qua khi đang trong Inventory/Menu
         if (mc.currentScreen != null) return;
 
-        AbstractClientPlayerEntity target = findBestTarget(cfg.reach(), cfg.fov());
+        // Lấy tickDelta chuẩn từ Render Context
+        float tickDelta = context.tickCounter().getTickDelta(true);
+
+        AbstractClientPlayerEntity target = findBestTarget(cfg.reach(), cfg.fov(), tickDelta);
         if (target != null) {
-            // Lấy tickDelta để đồng bộ tốc độ quay theo FPS thực tế của màn hình
-            float tickDelta = context.tickCounter().getTickDelta(true);
             aimAt(target, cfg, tickDelta);
         }
     }
@@ -34,12 +35,12 @@ public class AimAssist {
     private static void aimAt(AbstractClientPlayerEntity target, ModConfig.AimSnapshot cfg, float tickDelta) {
         if (mc.player == null) return;
 
-        // Nội suy vị trí thực tế của mục tiêu theo Frame để tránh giật khi nhảy
-        double targetX = MathHelper.lerp(tickDelta, target.lastRenderX, target.getX());
-        double targetY = MathHelper.lerp(tickDelta, target.lastRenderY, target.getY()) + (target.getHeight() * 0.65);
-        double targetZ = MathHelper.lerp(tickDelta, target.lastRenderZ, target.getZ());
+        // 1. Nội suy vị trí chuẩn của mục tiêu (kết hợp Motion Prediction - dự đoán hướng di chuyển)
+        double targetX = MathHelper.lerp(tickDelta, target.prevX, target.getX()) + (target.getVelocity().x * 0.25);
+        double targetY = MathHelper.lerp(tickDelta, target.prevY, target.getY()) + (target.getHeight() * 0.65) + (target.getVelocity().y * 0.25);
+        double targetZ = MathHelper.lerp(tickDelta, target.prevZ, target.getZ()) + (target.getVelocity().z * 0.25);
 
-        // Mắt người chơi theo thời gian thực (Render Position)
+        // Vị trí mắt người chơi
         Vec3d eyePos = mc.player.getCameraPosVec(tickDelta);
 
         double diffX = targetX - eyePos.x;
@@ -53,48 +54,80 @@ public class AimAssist {
         float yawDiff = MathHelper.wrapDegrees(idealYaw - mc.player.getYaw());
         float pitchDiff = MathHelper.wrapDegrees(idealPitch - mc.player.getPitch());
 
-        // Deadzone chống rung nhỏ
-        if (Math.abs(yawDiff) < 0.3f && Math.abs(pitchDiff) < 0.3f) {
+        // 2. Deadzone chống rung (Tâm đã vào vùng ngực thì dừng can thiệp)
+        if (Math.abs(yawDiff) < 0.25f && Math.abs(pitchDiff) < 0.25f) {
             return;
         }
 
-        // Tính toán độ mượt dựa theo hệ số Render Frame
-        float smoothFactor = Math.max(1.0f, (20.0f - cfg.speed()) * 0.8f);
-        float stepYaw = (yawDiff / smoothFactor) * tickDelta;
-        float stepPitch = (pitchDiff / smoothFactor) * tickDelta;
+        // 3. Dynamic Smooth Easing (Nội suy mượt giảm dần theo khoảng cách tâm)
+        float distanceToTargetAngle = (float) Math.hypot(yawDiff, pitchDiff);
+        float speedMultiplier = MathHelper.clamp(distanceToTargetAngle / 10.0f, 0.2f, 1.0f);
+        
+        float smoothFactor = Math.max(1.5f, (21.0f - cfg.speed()) * 1.2f);
+        
+        float stepYaw = (yawDiff / smoothFactor) * speedMultiplier;
+        float stepPitch = (pitchDiff / smoothFactor) * speedMultiplier;
 
-        // Giới hạn gia tốc quay
-        stepYaw = MathHelper.clamp(stepYaw, -cfg.maxYawPerTick(), cfg.maxYawPerTick());
+        // 4. Giới hạn gia tốc tối đa mỗi Frame
+        float maxStep = Math.max(0.5f, cfg.maxYawPerTick() * (tickDelta > 0 ? tickDelta : 1.0f));
+        stepYaw = MathHelper.clamp(stepYaw, -maxStep, maxStep);
         stepPitch = MathHelper.clamp(stepPitch, -cfg.maxPitchPerTick(), cfg.maxPitchPerTick());
 
-        // Áp dụng trực tiếp vào góc quay người chơi
+        // Áp dụng trực tiếp góc xoay mượt vào người chơi
         mc.player.setYaw(mc.player.getYaw() + stepYaw);
         mc.player.setPitch(mc.player.getPitch() + stepPitch);
     }
 
-    private static AbstractClientPlayerEntity findBestTarget(double maxReach, double maxFov) {
+    private static AbstractClientPlayerEntity findBestTarget(double maxReach, double maxFov, float tickDelta) {
         if (mc.world == null || mc.player == null) return null;
 
         List<AbstractClientPlayerEntity> players = mc.world.getPlayers();
 
-        Optional<AbstractClientPlayerEntity> bestTarget = players.stream()
+        return players.stream()
             .filter(p -> p != mc.player)
             .filter(AbstractClientPlayerEntity::isAlive)
             .filter(p -> !p.isSpectator())
             .filter(p -> mc.player.distanceTo(p) <= maxReach)
-            .filter(p -> getAngleDifference(p) <= maxFov)
-            .min(Comparator.comparingDouble(AimAssist::getAngleDifference));
-
-        return bestTarget.orElse(null);
+            .filter(p -> get3DAngleDifference(p, tickDelta) <= maxFov)
+            .filter(AimAssist::canSeeEntity) // Chỉ ngắm mục tiêu không bị che bởi khối
+            .min(Comparator.comparingDouble(p -> get3DAngleDifference(p, tickDelta)))
+            .orElse(null);
     }
 
-    private static double getAngleDifference(AbstractClientPlayerEntity target) {
+    // Tính khoảng cách góc 3D chuẩn xác (kết hợp cả Yaw và Pitch)
+    private static double get3DAngleDifference(AbstractClientPlayerEntity target, float tickDelta) {
         if (mc.player == null) return 999.0;
 
-        double diffX = target.getX() - mc.player.getX();
-        double diffZ = target.getZ() - mc.player.getZ();
-        float yaw = (float) Math.toDegrees(Math.atan2(diffZ, diffX)) - 90.0F;
+        Vec3d eyePos = mc.player.getCameraPosVec(tickDelta);
+        double diffX = target.getX() - eyePos.x;
+        double diffY = (target.getY() + target.getHeight() * 0.65) - eyePos.y;
+        double diffZ = target.getZ() - eyePos.z;
+        double dist = Math.sqrt(diffX * diffX + diffZ * diffZ);
 
-        return Math.abs(MathHelper.wrapDegrees(yaw - mc.player.getYaw()));
+        float yaw = (float) Math.toDegrees(Math.atan2(diffZ, diffX)) - 90.0F;
+        float pitch = (float) -Math.toDegrees(Math.atan2(diffY, dist));
+
+        float yawDiff = MathHelper.wrapDegrees(yaw - mc.player.getYaw());
+        float pitchDiff = MathHelper.wrapDegrees(pitch - mc.player.getPitch());
+
+        return Math.hypot(yawDiff, pitchDiff);
+    }
+
+    // Kiểm tra tầm nhìn (Raycast) để tránh ngắm xuyên tường
+    private static boolean canSeeEntity(AbstractClientPlayerEntity target) {
+        if (mc.player == null || mc.world == null) return false;
+
+        Vec3d start = mc.player.getCameraPosVec(1.0F);
+        Vec3d end = new Vec3d(target.getX(), target.getY() + target.getEyeHeight(target.getPose()), target.getZ());
+
+        HitResult result = mc.world.raycast(new RaycastContext(
+            start,
+            end,
+            RaycastContext.ShapeType.COLLIDER,
+            RaycastContext.FluidHandling.NONE,
+            mc.player
+        ));
+
+        return result.getType() == HitResult.Type.MISS;
     }
 }
