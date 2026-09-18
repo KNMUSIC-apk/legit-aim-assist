@@ -23,18 +23,13 @@ public final class Triggerbot {
     private static Method doAttackMethod = null;
 
     static {
-        try {
-            doAttackMethod = MinecraftClient.class.getDeclaredMethod("doAttack");
-            doAttackMethod.setAccessible(true);
-        } catch (NoSuchMethodException e) {
-            for (Method method : MinecraftClient.class.getDeclaredMethods()) {
-                if (method.getReturnType() == void.class && method.getParameterCount() == 0) {
-                    if (method.getName().equals("doAttack") || method.getName().equals("method_1536")) {
-                        doAttackMethod = method;
-                        doAttackMethod.setAccessible(true);
-                        break;
-                    }
-                }
+        // FIX 1: Xóa kiểm tra void.class để tương thích với Minecraft 1.20+ (doAttack trả về boolean)
+        for (Method method : MinecraftClient.class.getDeclaredMethods()) {
+            if (method.getParameterCount() == 0 && 
+               (method.getName().equals("doAttack") || method.getName().equals("method_1536"))) {
+                doAttackMethod = method;
+                doAttackMethod.setAccessible(true);
+                break;
             }
         }
     }
@@ -64,6 +59,8 @@ public final class Triggerbot {
         }
 
         Entity entity = ((EntityHitResult) hit).getEntity();
+        
+        // CHỈ ĐÁNH PLAYER (Theo đúng yêu cầu của bạn)
         if (!(entity instanceof PlayerEntity target) || !target.isAlive() || target.isSpectator() || target.isCreative() || target.isRemoved()) {
             return;
         }
@@ -73,7 +70,8 @@ public final class Triggerbot {
             return;
         }
 
-        float humanizedCooldownThreshold = 0.93f + (random.nextFloat() * 0.06f);
+        // Tối ưu ngưỡng hồi chiêu xuống 0.90f để bù độ trễ của mạng (Ping)
+        float humanizedCooldownThreshold = 0.90f + (random.nextFloat() * 0.05f);
         float cooldown = player.getAttackCooldownProgress(0.0f);
         
         ItemStack mainHandStack = player.getMainHandStack();
@@ -81,35 +79,33 @@ public final class Triggerbot {
         boolean targetIsBlocking = target.isBlocking();
 
         // ============================================================
-        // TRICK FAST-SWAP THEO VIDEO (PACKET-BASED SHIELD BREAKER)
+        // TRICK FAST-SWAP TỰ ĐỘNG PHÁ KHIÊN BẰNG RÌU
         // ============================================================
         if (targetIsBlocking && mainHandStack.getItem() instanceof SwordItem) {
             int axeSlot = findAxeSlot(player);
             
-            // Chỉ thi triển Fast-Swap khi Kiếm đã nạp đầy chiêu
             if (axeSlot != -1 && cooldown >= humanizedCooldownThreshold) {
-                
-                // Bước 1: ÉP GỬI GÓI TIN BÁO SERVER TA ĐÃ CẦM RÌU (Không cần chờ Vanilla tự check)
+                // Đổi sang rìu
                 mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(axeSlot));
-                player.getInventory().selectedSlot = axeSlot; // Đồng bộ Client
+                player.getInventory().selectedSlot = axeSlot; 
                 
-                // Bước 2: TUNG ĐÒN ĐÁNH NGAY LẬP TỨC (Lúc này Server ghi nhận ta đang đánh bằng Rìu)
+                // Vung tay phá khiên
                 mc.interactionManager.attackEntity(player, target);
                 player.swingHand(Hand.MAIN_HAND);
+                player.resetLastAttackedTicks(); // FIX 2: Bắt buộc reset hồi chiêu
                 
-                // Bước 3: ÉP GỬI GÓI TIN TRẢ VỀ KIẾM NGAY TRONG CÙNG 1 TICK
+                // Trả về kiếm
                 mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(currentSlot));
-                player.getInventory().selectedSlot = currentSlot; // Đồng bộ Client
+                player.getInventory().selectedSlot = currentSlot; 
                 
-                // Bước 4: Reset nhịp độ combo
                 hitCount++;
-                pauseUntilTime = currentTime + (150 + random.nextInt(100)); // Delay một nhịp tay
+                pauseUntilTime = currentTime + (150 + random.nextInt(100));
                 return;
             }
         }
 
         // ============================================================
-        // CHUỖI COMBO BÌNH THƯỜNG
+        // CHUỖI COMBO BÌNH THƯỜNG (BẮT BUỘC CẦM KIẾM/RÌU)
         // ============================================================
         boolean isWeapon = mainHandStack.getItem() instanceof SwordItem
                         || mainHandStack.getItem() instanceof AxeItem;
@@ -121,7 +117,7 @@ public final class Triggerbot {
             return;
         }
 
-        // Tỷ lệ đánh hụt tự nhiên 8%
+        // Tỷ lệ vung hụt tự nhiên 8%
         if (random.nextInt(100) < 8) {
             player.swingHand(Hand.MAIN_HAND);
             pauseUntilTime = currentTime + (120 + random.nextInt(100));
@@ -131,6 +127,7 @@ public final class Triggerbot {
         invokeDoAttack();
         hitCount++;
 
+        // Nghỉ nhịp tay ngẫu nhiên để giống thật
         if (hitCount >= targetHitsToPause) {
             pauseUntilTime = currentTime + (100 + random.nextInt(120));
             hitCount = 0;
@@ -156,14 +153,19 @@ public final class Triggerbot {
             try {
                 doAttackMethod.invoke(mc);
             } catch (Exception e) {
-                e.printStackTrace();
+                fallbackAttack();
             }
         } else {
-            if (mc.interactionManager != null && mc.crosshairTarget instanceof EntityHitResult entityHit) {
-                mc.interactionManager.attackEntity(mc.player, entityHit.getEntity());
-                if (mc.player != null) {
-                    mc.player.swingHand(Hand.MAIN_HAND);
-                }
+            fallbackAttack();
+        }
+    }
+
+    private static void fallbackAttack() {
+        if (mc.interactionManager != null && mc.crosshairTarget instanceof EntityHitResult entityHit) {
+            mc.interactionManager.attackEntity(mc.player, entityHit.getEntity());
+            if (mc.player != null) {
+                mc.player.swingHand(Hand.MAIN_HAND);
+                mc.player.resetLastAttackedTicks(); // FIX 2: Chống lỗi spam click rỗng bị server chặn sát thương
             }
         }
     }
