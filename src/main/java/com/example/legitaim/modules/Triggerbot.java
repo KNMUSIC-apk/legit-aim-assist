@@ -6,6 +6,7 @@ import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.AxeItem;
+import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.SwordItem;
 import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
@@ -23,7 +24,6 @@ public final class Triggerbot {
     private static Method doAttackMethod = null;
 
     static {
-        // FIX 1: Xóa kiểm tra void.class để tương thích với Minecraft 1.20+ (doAttack trả về boolean)
         for (Method method : MinecraftClient.class.getDeclaredMethods()) {
             if (method.getParameterCount() == 0 && 
                (method.getName().equals("doAttack") || method.getName().equals("method_1536"))) {
@@ -34,8 +34,6 @@ public final class Triggerbot {
         }
     }
 
-    private static int hitCount = 0;
-    private static int targetHitsToPause = getRandomPauseThreshold();
     private static long pauseUntilTime = 0L;
 
     private Triggerbot() {}
@@ -45,7 +43,7 @@ public final class Triggerbot {
         ClientPlayerEntity player = mc.player;
 
         if (!cfg.enabled() || player == null || mc.world == null || mc.interactionManager == null || mc.currentScreen != null) {
-            resetState();
+            pauseUntilTime = 0L;
             return;
         }
 
@@ -60,7 +58,6 @@ public final class Triggerbot {
 
         Entity entity = ((EntityHitResult) hit).getEntity();
         
-        // CHỈ ĐÁNH PLAYER (Theo đúng yêu cầu của bạn)
         if (!(entity instanceof PlayerEntity target) || !target.isAlive() || target.isSpectator() || target.isCreative() || target.isRemoved()) {
             return;
         }
@@ -70,42 +67,66 @@ public final class Triggerbot {
             return;
         }
 
-        // Tối ưu ngưỡng hồi chiêu xuống 0.90f để bù độ trễ của mạng (Ping)
-        float humanizedCooldownThreshold = 0.90f + (random.nextFloat() * 0.05f);
         float cooldown = player.getAttackCooldownProgress(0.0f);
-        
         ItemStack mainHandStack = player.getMainHandStack();
         int currentSlot = player.getInventory().selectedSlot;
+        
         boolean targetIsBlocking = target.isBlocking();
+        
+        // Điều kiện Smash: Không ở mặt đất VÀ vận tốc rơi trục Y phải nhỏ hơn 0 (đang rơi xuống)
+        boolean isFalling = !player.isOnGround() && player.getVelocity().y < 0.0;
 
         // ============================================================
-        // TRICK FAST-SWAP TỰ ĐỘNG PHÁ KHIÊN BẰNG RÌU
+        // 1. FAST-SWAP TỰ ĐỘNG PHÁ KHIÊN BẰNG AXE
         // ============================================================
         if (targetIsBlocking && mainHandStack.getItem() instanceof SwordItem) {
             int axeSlot = findAxeSlot(player);
             
-            if (axeSlot != -1 && cooldown >= humanizedCooldownThreshold) {
-                // Đổi sang rìu
+            if (axeSlot != -1 && cooldown >= 0.99f) {
                 mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(axeSlot));
                 player.getInventory().selectedSlot = axeSlot; 
                 
-                // Vung tay phá khiên
                 mc.interactionManager.attackEntity(player, target);
                 player.swingHand(Hand.MAIN_HAND);
-                player.resetLastAttackedTicks(); // FIX 2: Bắt buộc reset hồi chiêu
+                player.resetLastAttackedTicks(); 
                 
-                // Trả về kiếm
                 mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(currentSlot));
                 player.getInventory().selectedSlot = currentSlot; 
                 
-                hitCount++;
-                pauseUntilTime = currentTime + (150 + random.nextInt(100));
+                pauseUntilTime = currentTime + 50;
                 return;
             }
         }
 
         // ============================================================
-        // CHUỖI COMBO BÌNH THƯỜNG (BẮT BUỘC CẦM KIẾM/RÌU)
+        // 2. FAST-SWAP TỰ ĐỘNG ĐẬP MACE (CHỈ KHI ĐANG RƠI XUỐNG)
+        // ============================================================
+        if (isFalling && mainHandStack.getItem() instanceof SwordItem) {
+            int maceSlot = findMaceSlot(player);
+            
+            if (maceSlot != -1 && cooldown >= 0.99f) {
+                // Chuyển sang Mace
+                mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(maceSlot));
+                player.getInventory().selectedSlot = maceSlot;
+                
+                // Đánh gây sát thương Mace
+                mc.interactionManager.attackEntity(player, target);
+                
+                // Chuyển lại Sword
+                mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(currentSlot));
+                player.getInventory().selectedSlot = currentSlot;
+                
+                // Hiển thị hoạt ảnh vung Sword
+                player.swingHand(Hand.MAIN_HAND);
+                player.resetLastAttackedTicks();
+                
+                pauseUntilTime = currentTime + 50;
+                return;
+            }
+        }
+
+        // ============================================================
+        // 3. CHUỖI COMBO TỐI ƯU (BÌNH THƯỜNG / ĐỨNG DƯỚI ĐẤT / NHẢY LÊN)
         // ============================================================
         boolean isWeapon = mainHandStack.getItem() instanceof SwordItem
                         || mainHandStack.getItem() instanceof AxeItem;
@@ -113,26 +134,13 @@ public final class Triggerbot {
             return; 
         }
 
-        if (cooldown < humanizedCooldownThreshold) {
-            return;
-        }
-
-        // Tỷ lệ vung hụt tự nhiên 8%
-        if (random.nextInt(100) < 8) {
-            player.swingHand(Hand.MAIN_HAND);
-            pauseUntilTime = currentTime + (120 + random.nextInt(100));
+        if (cooldown < 0.99f) {
             return;
         }
 
         invokeDoAttack();
-        hitCount++;
-
-        // Nghỉ nhịp tay ngẫu nhiên để giống thật
-        if (hitCount >= targetHitsToPause) {
-            pauseUntilTime = currentTime + (100 + random.nextInt(120));
-            hitCount = 0;
-            targetHitsToPause = getRandomPauseThreshold();
-        }
+        
+        pauseUntilTime = currentTime + (10 + random.nextInt(10));
     }
 
     private static int findAxeSlot(ClientPlayerEntity player) {
@@ -144,8 +152,14 @@ public final class Triggerbot {
         return -1;
     }
 
-    private static int getRandomPauseThreshold() {
-        return 5 + random.nextInt(5);
+    private static int findMaceSlot(ClientPlayerEntity player) {
+        for (int i = 0; i < 9; i++) {
+            Item item = player.getInventory().getStack(i).getItem();
+            if (item != null && item.toString().toLowerCase().contains("mace")) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static void invokeDoAttack() {
@@ -165,13 +179,8 @@ public final class Triggerbot {
             mc.interactionManager.attackEntity(mc.player, entityHit.getEntity());
             if (mc.player != null) {
                 mc.player.swingHand(Hand.MAIN_HAND);
-                mc.player.resetLastAttackedTicks(); // FIX 2: Chống lỗi spam click rỗng bị server chặn sát thương
+                mc.player.resetLastAttackedTicks(); 
             }
         }
-    }
-
-    private static void resetState() {
-        hitCount = 0;
-        pauseUntilTime = 0L;
     }
 }
