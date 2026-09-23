@@ -16,10 +16,7 @@ public class AimAssist {
 
     private static final MinecraftClient mc = MinecraftClient.getInstance();
 
-    // Hàm tick cũ giữ lại để tương thích nếu nơi khác gọi
-    public static void tick() {
-        // Chuyển sang dùng onRender(context) trong WorldRenderEvents
-    }
+    public static void tick() {}
 
     public static void onRender(WorldRenderContext context) {
         ModConfig.AimSnapshot cfg = ModConfig.snapshotAim();
@@ -38,9 +35,10 @@ public class AimAssist {
     private static void aimAt(AbstractClientPlayerEntity target, ModConfig.AimSnapshot cfg, float tickDelta) {
         if (mc.player == null) return;
 
-        double targetX = MathHelper.lerp(tickDelta, target.prevX, target.getX()) + (target.getVelocity().x * 0.25);
-        double targetY = MathHelper.lerp(tickDelta, target.prevY, target.getY()) + (target.getHeight() * 0.65) + (target.getVelocity().y * 0.25);
-        double targetZ = MathHelper.lerp(tickDelta, target.prevZ, target.getZ()) + (target.getVelocity().z * 0.25);
+        // Dự đoán hướng di chuyển ở mức vừa phải (0.28)
+        double targetX = MathHelper.lerp(tickDelta, target.prevX, target.getX()) + (target.getVelocity().x * 0.28);
+        double targetY = MathHelper.lerp(tickDelta, target.prevY, target.getY()) + (target.getHeight() * 0.62) + (target.getVelocity().y * 0.28);
+        double targetZ = MathHelper.lerp(tickDelta, target.prevZ, target.getZ()) + (target.getVelocity().z * 0.28);
 
         Vec3d eyePos = mc.player.getCameraPosVec(tickDelta);
 
@@ -55,21 +53,26 @@ public class AimAssist {
         float yawDiff = MathHelper.wrapDegrees(idealYaw - mc.player.getYaw());
         float pitchDiff = MathHelper.wrapDegrees(idealPitch - mc.player.getPitch());
 
-        if (Math.abs(yawDiff) < 0.25f && Math.abs(pitchDiff) < 0.25f) {
+        // Deadzone 0.15f: Giúp tâm ổn định ở giữa ngực mục tiêu, không rung nhè nhẹ
+        if (Math.abs(yawDiff) < 0.15f && Math.abs(pitchDiff) < 0.15f) {
             return;
         }
 
+        // Tinh chỉnh lực hút cân bằng: Vừa bám sát, vừa không bị quá cứng tay
         float distanceToTargetAngle = (float) Math.hypot(yawDiff, pitchDiff);
-        float speedMultiplier = MathHelper.clamp(distanceToTargetAngle / 10.0f, 0.2f, 1.0f);
+        float speedMultiplier = MathHelper.clamp(distanceToTargetAngle / 7.5f, 0.35f, 1.0f);
         
-        float smoothFactor = Math.max(1.5f, (21.0f - cfg.speed()) * 1.2f);
+        float smoothFactor = Math.max(1.2f, (21.0f - cfg.speed()) * 0.8f);
         
         float stepYaw = (yawDiff / smoothFactor) * speedMultiplier;
         float stepPitch = (pitchDiff / smoothFactor) * speedMultiplier;
 
-        float maxStep = Math.max(0.5f, cfg.maxYawPerTick() * (tickDelta > 0 ? tickDelta : 1.0f));
-        stepYaw = MathHelper.clamp(stepYaw, -maxStep, maxStep);
-        stepPitch = MathHelper.clamp(stepPitch, -cfg.maxPitchPerTick(), cfg.maxPitchPerTick());
+        // Giới hạn góc xoay tối đa cân bằng chuẩn Legit
+        float maxStepYaw = Math.max(1.2f, cfg.maxYawPerTick() * 1.6f * (tickDelta > 0 ? tickDelta : 1.0f));
+        float maxStepPitch = Math.max(1.2f, cfg.maxPitchPerTick() * 1.6f * (tickDelta > 0 ? tickDelta : 1.0f));
+
+        stepYaw = MathHelper.clamp(stepYaw, -maxStepYaw, maxStepYaw);
+        stepPitch = MathHelper.clamp(stepPitch, -maxStepPitch, maxStepPitch);
 
         mc.player.setYaw(mc.player.getYaw() + stepYaw);
         mc.player.setPitch(mc.player.getPitch() + stepPitch);
@@ -96,7 +99,7 @@ public class AimAssist {
 
         Vec3d eyePos = mc.player.getCameraPosVec(tickDelta);
         double diffX = target.getX() - eyePos.x;
-        double diffY = (target.getY() + target.getHeight() * 0.65) - eyePos.y;
+        double diffY = (target.getY() + target.getHeight() * 0.62) - eyePos.y;
         double diffZ = target.getZ() - eyePos.z;
         double dist = Math.sqrt(diffX * diffX + diffZ * diffZ);
 
