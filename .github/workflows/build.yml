@@ -1,10 +1,12 @@
+
 name: Build Minecraft Mod
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -18,19 +20,23 @@ jobs:
         uses: actions/setup-java@v4
         with:
           java-version: '21'
-          distribution: 'temurin'
-          cache: 'gradle'
+          distribution: temurin
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.10.2'
+      - name: Install Gradle 8.10.2
+        run: |
+          wget https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+          unzip -q gradle-8.10.2-bin.zip
+          echo "$GITHUB_WORKSPACE/gradle-8.10.2/bin" >> $GITHUB_PATH
+
+      - name: Check Gradle
+        run: gradle --version
 
       - name: Build with Gradle
-        run: ./gradlew build --no-daemon --stacktrace
+        run: gradle build --no-daemon --stacktrace
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mod-jar-artifact
           path: build/libs/*.jar
+          if-no-files-found: error
