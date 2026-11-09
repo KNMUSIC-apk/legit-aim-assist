@@ -1,35 +1,39 @@
-name: Build Fabric Mod
+name: Build Minecraft Mod
 
 on:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch:
+  pull_request:
+    branches: [ "main", "master" ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout mã nguồn từ repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Cài đặt môi trường Java 21 (Bắt buộc cho Minecraft 1.21+)
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
+          cache: 'gradle'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.8'
+      # 3. Cấp quyền thực thi cho Gradle Wrapper trên Linux
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
 
+      # 4. Tiến hành Build dự án để tạo file .jar
       - name: Build with Gradle
-        run: gradle build --no-daemon --stacktrace
+        run: ./gradlew build
 
+      # 5. Lưu trữ file .jar sau khi build thành công (Artifacts)
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: LegitAim-Mod
+          name: mod-jar-artifact
           path: build/libs/*.jar
-          if-no-files-found: error
