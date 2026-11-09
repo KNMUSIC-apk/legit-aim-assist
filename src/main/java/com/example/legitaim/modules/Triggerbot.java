@@ -7,34 +7,39 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.AxeItem;
 import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
 import net.minecraft.item.SwordItem;
-import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.EntityHitResult;
 import net.minecraft.util.hit.HitResult;
 
-import java.lang.reflect.Method;
-import java.util.Random;
+import java.util.concurrent.ThreadLocalRandom;
 
 public final class Triggerbot {
 
     private static final MinecraftClient mc = MinecraftClient.getInstance();
-    private static final Random random = new Random();
-    private static Method doAttackMethod = null;
 
-    static {
-        for (Method method : MinecraftClient.class.getDeclaredMethods()) {
-            if (method.getParameterCount() == 0 && 
-               (method.getName().equals("doAttack") || method.getName().equals("method_1536"))) {
-                doAttackMethod = method;
-                doAttackMethod.setAccessible(true);
-                break;
-            }
-        }
-    }
+    // Tunable humanization constants.
+    private static final double MAX_RANGE = 3.0D;
+    private static final double MIN_COOLDOWN = 0.88D;
+    private static final double MAX_COOLDOWN = 1.00D;
+    private static final int MIN_REACT_TICKS = 2;
+    private static final int MAX_REACT_TICKS = 5;
+    private static final int MIN_LOCK_TICKS = 2;
+    private static final double BASE_MISS = 0.05D;
+    private static final double MAX_MISS = 0.30D;
+    private static final boolean REQUIRE_CRIT = false;
+    private static final boolean IGNORE_BLOCKING = false;
 
-    private static long pauseUntilTime = 0L;
+    // Runtime state.
+    private static int reactionTimer = -1;
+    private static int lastTargetId = -1;
+    private static int lastAttackTick = -100;
+    private static int targetLockTicks = 0;
+    private static int pauseTicks = 0;
+    private static int switchPenaltyTicks = 0;
+    private static double requiredCooldown = 0.95D;
+    private static int missStreak = 0;
+    private static int hitStreak = 0;
 
     private Triggerbot() {}
 
@@ -42,145 +47,149 @@ public final class Triggerbot {
         ModConfig.TriggerSnapshot cfg = ModConfig.snapshotTrigger();
         ClientPlayerEntity player = mc.player;
 
-        if (!cfg.enabled() || player == null || mc.world == null || mc.interactionManager == null || mc.currentScreen != null) {
-            pauseUntilTime = 0L;
+        if (!cfg.enabled() || player == null || mc.world == null || mc.interactionManager == null) {
+            reset();
             return;
         }
 
-        if (player.isUsingItem()) {
+        if (mc.currentScreen != null || player.isUsingItem() || player.isSpectator()) {
+            reset();
+            return;
+        }
+
+        Item item = player.getMainHandStack().getItem();
+        if (!(item instanceof SwordItem) && !(item instanceof AxeItem)) {
+            reset();
             return;
         }
 
         HitResult hit = mc.crosshairTarget;
         if (hit == null || hit.getType() != HitResult.Type.ENTITY) {
+            reset();
             return;
         }
 
         Entity entity = ((EntityHitResult) hit).getEntity();
-        
-        if (!(entity instanceof PlayerEntity target) || !target.isAlive() || target.isSpectator() || target.isCreative() || target.isRemoved()) {
+        if (!(entity instanceof PlayerEntity target) || !isValidTarget(player, target)) {
+            reset();
             return;
         }
 
-        long currentTime = System.currentTimeMillis();
-        if (currentTime < pauseUntilTime) {
+        // Human-like target acquisition delay.
+        if (target.getId() != lastTargetId) {
+            lastTargetId = target.getId();
+            reactionTimer = rand(MIN_REACT_TICKS, MAX_REACT_TICKS);
+            targetLockTicks = 0;
+            switchPenaltyTicks = rand(1, 3);
+            requiredCooldown = randDouble(MIN_COOLDOWN, MAX_COOLDOWN);
+        }
+
+        targetLockTicks++;
+
+        // Short delay when switching targets.
+        if (switchPenaltyTicks > 0) {
+            switchPenaltyTicks--;
             return;
         }
 
-        float cooldown = player.getAttackCooldownProgress(0.0f);
-        ItemStack mainHandStack = player.getMainHandStack();
-        int currentSlot = player.getInventory().selectedSlot;
-        
-        boolean targetIsBlocking = target.isBlocking();
-        
-        // Điều kiện Smash: Không ở mặt đất VÀ vận tốc rơi trục Y phải nhỏ hơn 0 (đang rơi xuống)
-        boolean isFalling = !player.isOnGround() && player.getVelocity().y < 0.0;
-
-        // ============================================================
-        // 1. FAST-SWAP TỰ ĐỘNG PHÁ KHIÊN BẰNG AXE
-        // ============================================================
-        if (targetIsBlocking && mainHandStack.getItem() instanceof SwordItem) {
-            int axeSlot = findAxeSlot(player);
-            
-            if (axeSlot != -1 && cooldown >= 0.99f) {
-                mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(axeSlot));
-                player.getInventory().selectedSlot = axeSlot; 
-                
-                mc.interactionManager.attackEntity(player, target);
-                player.swingHand(Hand.MAIN_HAND);
-                player.resetLastAttackedTicks(); 
-                
-                mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(currentSlot));
-                player.getInventory().selectedSlot = currentSlot; 
-                
-                pauseUntilTime = currentTime + 50;
-                return;
-            }
-        }
-
-        // ============================================================
-        // 2. FAST-SWAP TỰ ĐỘNG ĐẬP MACE (CHỈ KHI ĐANG RƠI XUỐNG)
-        // ============================================================
-        if (isFalling && mainHandStack.getItem() instanceof SwordItem) {
-            int maceSlot = findMaceSlot(player);
-            
-            if (maceSlot != -1 && cooldown >= 0.99f) {
-                // Chuyển sang Mace
-                mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(maceSlot));
-                player.getInventory().selectedSlot = maceSlot;
-                
-                // Đánh gây sát thương Mace
-                mc.interactionManager.attackEntity(player, target);
-                
-                // Chuyển lại Sword
-                mc.getNetworkHandler().sendPacket(new UpdateSelectedSlotC2SPacket(currentSlot));
-                player.getInventory().selectedSlot = currentSlot;
-                
-                // Hiển thị hoạt ảnh vung Sword
-                player.swingHand(Hand.MAIN_HAND);
-                player.resetLastAttackedTicks();
-                
-                pauseUntilTime = currentTime + 50;
-                return;
-            }
-        }
-
-        // ============================================================
-        // 3. CHUỖI COMBO TỐI ƯU (BÌNH THƯỜNG / ĐỨNG DƯỚI ĐẤT / NHẢY LÊN)
-        // ============================================================
-        boolean isWeapon = mainHandStack.getItem() instanceof SwordItem
-                        || mainHandStack.getItem() instanceof AxeItem;
-        if (!isWeapon) {
-            return; 
-        }
-
-        if (cooldown < 0.99f) {
+        // Reaction time before first attack on a target.
+        if (reactionTimer > 0) {
+            reactionTimer--;
             return;
         }
 
-        invokeDoAttack();
-        
-        pauseUntilTime = currentTime + (10 + random.nextInt(10));
+        // Random pause after attack or miss.
+        if (pauseTicks > 0) {
+            pauseTicks--;
+            return;
+        }
+
+        if (targetLockTicks < MIN_LOCK_TICKS) {
+            return;
+        }
+
+        if (player.distanceTo(target) > MAX_RANGE) {
+            return;
+        }
+
+        // Do not attack before a randomized cooldown threshold.
+        if (player.getAttackCooldownProgress(0.5f) < requiredCooldown) {
+            return;
+        }
+
+        // Optional critical-hit requirement.
+        if (REQUIRE_CRIT && !canCrit(player)) {
+            return;
+        }
+
+        // Prevent multiple attacks within the same short window.
+        if (player.age - lastAttackTick < rand(1, 2)) {
+            return;
+        }
+
+        // Adaptive miss chance based on distance and recent hit streak.
+        double distanceFactor = Math.min(1.0D, player.distanceTo(target) / MAX_RANGE);
+        double missChance = Math.min(
+                MAX_MISS,
+                BASE_MISS + hitStreak * 0.025D + distanceFactor * 0.10D
+        );
+
+        if (ThreadLocalRandom.current().nextDouble() < missChance) {
+            missStreak++;
+            hitStreak = 0;
+            pauseTicks = rand(2, 4);
+            reactionTimer = rand(1, 2);
+            requiredCooldown = randDouble(MIN_COOLDOWN, MAX_COOLDOWN);
+            return;
+        }
+
+        mc.interactionManager.attackEntity(player, target);
+        player.swingHand(Hand.MAIN_HAND);
+
+        lastAttackTick = player.age;
+        hitStreak++;
+        missStreak = 0;
+        requiredCooldown = randDouble(MIN_COOLDOWN, MAX_COOLDOWN);
+        pauseTicks = rand(0, 2);
     }
 
-    private static int findAxeSlot(ClientPlayerEntity player) {
-        for (int i = 0; i < 9; i++) {
-            if (player.getInventory().getStack(i).getItem() instanceof AxeItem) {
-                return i;
-            }
+    private static boolean isValidTarget(ClientPlayerEntity self, PlayerEntity target) {
+        if (target == self || !target.isAlive() || target.isRemoved() || target.isSpectator()) {
+            return false;
         }
-        return -1;
+        if (target.isCreative()) {
+            return false;
+        }
+        if (self.isTeammate(target)) {
+            return false;
+        }
+        if (IGNORE_BLOCKING && target.isBlocking()) {
+            return false;
+        }
+        return self.canSee(target);
     }
 
-    private static int findMaceSlot(ClientPlayerEntity player) {
-        for (int i = 0; i < 9; i++) {
-            Item item = player.getInventory().getStack(i).getItem();
-            if (item != null && item.toString().toLowerCase().contains("mace")) {
-                return i;
-            }
-        }
-        return -1;
+    private static boolean canCrit(ClientPlayerEntity player) {
+        return player.fallDistance > 0.0f
+                && !player.isOnGround()
+                && !player.isClimbing()
+                && !player.isTouchingWater()
+                && !player.hasVehicle();
     }
 
-    private static void invokeDoAttack() {
-        if (doAttackMethod != null) {
-            try {
-                doAttackMethod.invoke(mc);
-            } catch (Exception e) {
-                fallbackAttack();
-            }
-        } else {
-            fallbackAttack();
-        }
+    private static int rand(int min, int max) {
+        return ThreadLocalRandom.current().nextInt(min, max + 1);
     }
 
-    private static void fallbackAttack() {
-        if (mc.interactionManager != null && mc.crosshairTarget instanceof EntityHitResult entityHit) {
-            mc.interactionManager.attackEntity(mc.player, entityHit.getEntity());
-            if (mc.player != null) {
-                mc.player.swingHand(Hand.MAIN_HAND);
-                mc.player.resetLastAttackedTicks(); 
-            }
-        }
+    private static double randDouble(double min, double max) {
+        return min + ThreadLocalRandom.current().nextDouble() * (max - min);
+    }
+
+    private static void reset() {
+        lastTargetId = -1;
+        reactionTimer = -1;
+        targetLockTicks = 0;
+        pauseTicks = 0;
+        switchPenaltyTicks = 0;
     }
 }
