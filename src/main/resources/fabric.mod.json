@@ -1,30 +1,19 @@
+
 {
   "schemaVersion": 1,
-  "id": "ten_mod_cua_ban",
+  "id": "legitaim",
   "version": "${version}",
-  "name": "Ten Mod",
-  "description": "Mo ta mod cua ban.",
-  "authors": [
-    "Nguyen Truong Phi"
-  ],
-  "contact": {},
-  "license": "MIT",
-  "icon": "assets/mod/icon.png",
-  "environment": "*",
+  "name": "Legit Aim Assist",
+  "description": "Client-side Minecraft utility mod",
+  "environment": "client",
   "entrypoints": {
-    "main": [
-      "com.example.mod.ModMain"
-    ],
     "client": [
-      "com.example.mod.ModClient"
+      "com.example.legitaim.LegitAimAssistClient"
     ]
   },
-  "mixins": [
-    "ten_mod.mixins.json"
-  ],
   "depends": {
-    "fabricloader": ">=0.16.0",
-    "minecraft": "~1.21.11",
+    "fabricloader": ">=0.18.0",
+    "minecraft": "1.21.11",
     "java": ">=21",
     "fabric-api": "*"
   }
