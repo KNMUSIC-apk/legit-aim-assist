@@ -28,67 +28,59 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      # Checkout
       - name: Checkout Repository
         uses: actions/checkout@v5
 
-      # Java 21
       - name: Setup Java 21
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
 
-      # Install Gradle 9.2.1
-      - name: Install Gradle
+      - name: Install Gradle 9.2.1
         shell: bash
         run: |
           set -euo pipefail
 
-          GRADLE_VERSION="9.2.1"
-          DOWNLOAD="$RUNNER_TEMP/gradle.zip"
+          VERSION=9.2.1
 
           curl -fL \
-            "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
-            -o "$DOWNLOAD"
+            "https://services.gradle.org/distributions/gradle-${VERSION}-bin.zip" \
+            -o "$RUNNER_TEMP/gradle.zip"
 
-          unzip -q "$DOWNLOAD" -d "$RUNNER_TEMP"
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
 
-          echo "$RUNNER_TEMP/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/gradle-${VERSION}/bin" >> "$GITHUB_PATH"
 
-      # Verify environment
       - name: Verify Environment
         run: |
           java -version
           gradle --version
 
-      # Build
-      - name: Build Fabric Mod
-        shell: bash
+      - name: Validate Gradle Configuration
         run: |
-          gradle \
-            --no-daemon \
-            --no-configuration-cache \
-            clean build \
-            --stacktrace
+          gradle --no-daemon tasks --stacktrace
 
-      # Check output
+      - name: Build Fabric Mod
+        run: |
+          gradle --no-daemon clean build --stacktrace
+
       - name: Verify JAR
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking generated JAR files..."
+          mkdir -p build/libs
 
           find build/libs -maxdepth 1 -type f -name '*.jar' -print
 
           if ! find build/libs -maxdepth 1 -type f -name '*.jar' | grep -q .; then
-            echo "ERROR: No JAR generated!"
+            echo "ERROR: No JAR generated"
             exit 1
           fi
 
-      # Upload
       - name: Upload Build Artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: legit-aim-assist-1.21.11
@@ -96,14 +88,11 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # Summary
       - name: Build Summary
         if: always()
         run: |
-          echo "================================"
           echo "Project: Legit Aim Assist"
           echo "Minecraft: 1.21.11"
           echo "Java: 21"
           echo "Gradle: 9.2.1"
           echo "Status: ${{ job.status }}"
-          echo "================================"
