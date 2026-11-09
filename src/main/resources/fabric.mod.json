@@ -1,21 +1,30 @@
 {
   "schemaVersion": 1,
-  "id": "legitaim",
+  "id": "ten_mod_cua_ban",
   "version": "${version}",
-  "name": "Legit Aim Assist",
-  "description": "Legit Aim Assist + Hitbox ESP + Triggerbot cho PvP 1.21.1.",
-  "authors": [ "You" ],
+  "name": "Ten Mod",
+  "description": "Mo ta mod cua ban.",
+  "authors": [
+    "Nguyen Truong Phi"
+  ],
+  "contact": {},
   "license": "MIT",
-  "icon": "assets/legitaim/icon.png",
-  "environment": "client",
+  "icon": "assets/mod/icon.png",
+  "environment": "*",
   "entrypoints": {
+    "main": [
+      "com.example.mod.ModMain"
+    ],
     "client": [
-      "com.example.legitaim.LegitAimAssistClient"
+      "com.example.mod.ModClient"
     ]
   },
+  "mixins": [
+    "ten_mod.mixins.json"
+  ],
   "depends": {
-    "fabricloader": ">=0.16.5",
-    "minecraft": "~1.21.1",
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.11",
     "java": ">=21",
     "fabric-api": "*"
   }
