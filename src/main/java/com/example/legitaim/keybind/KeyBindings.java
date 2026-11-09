@@ -1,38 +1,48 @@
+
 package com.example.legitaim.keybind;
 
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
-import org.lwjgl.glfw.GLFW;
 
-public final class KeyBindings {
+public class KeyBindings {
 
-    public static KeyBinding toggleAimAssist;
-    public static KeyBinding toggleESP;
-    public static KeyBinding toggleTriggerbot;
+    public static KeyBinding TOGGLE_AIM;
+    public static KeyBinding TOGGLE_TRIGGERBOT;
+    public static KeyBinding TOGGLE_ESP;
 
-    private KeyBindings() {}
+    private static boolean registered = false;
 
     public static void register() {
-        toggleAimAssist = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-            "key.legitaim.toggle_aim",
-            InputUtil.Type.KEYSYM,
-            GLFW.GLFW_KEY_V,
-            "category.legitaim.bindings"
-        ));
+        if (registered) return;
 
-        toggleESP = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-            "key.legitaim.toggle_esp",
-            InputUtil.Type.KEYSYM,
-            GLFW.GLFW_KEY_H,
-            "category.legitaim.bindings"
-        ));
+        TOGGLE_AIM = KeyBindingHelper.registerKeyBinding(
+            new KeyBinding(
+                "key.legitaim.toggle_aim",
+                InputUtil.Type.KEYSYM,
+                79,
+                KeyBinding.Category.MISC
+            )
+        );
 
-        toggleTriggerbot = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-            "key.legitaim.toggle_trigger",
-            InputUtil.Type.KEYSYM,
-            GLFW.GLFW_KEY_R,
-            "category.legitaim.bindings"
-        ));
+        TOGGLE_TRIGGERBOT = KeyBindingHelper.registerKeyBinding(
+            new KeyBinding(
+                "key.legitaim.toggle_triggerbot",
+                InputUtil.Type.KEYSYM,
+                75,
+                KeyBinding.Category.MISC
+            )
+        );
+
+        TOGGLE_ESP = KeyBindingHelper.registerKeyBinding(
+            new KeyBinding(
+                "key.legitaim.toggle_esp",
+                InputUtil.Type.KEYSYM,
+                76,
+                KeyBinding.Category.MISC
+            )
+        );
+
+        registered = true;
     }
 }
