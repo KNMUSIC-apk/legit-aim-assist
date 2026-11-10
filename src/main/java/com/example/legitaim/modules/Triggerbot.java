@@ -18,7 +18,7 @@ public class Triggerbot {
     private static int currentTickCount = 0;
     private static int comboCounter = 0;
 
-    // Quản lý delay cho phát đánh đầu tiên và thời gian reset (10 giây = 200 ticks)
+    // Quản lý độ trễ phát đánh đầu tiên và hệ thống reset sau 10 giây
     private static boolean hasFirstHitOccurred = false;
     private static int firstHitDelayTicks = 0;
     private static int firstHitCounter = 0;
@@ -30,16 +30,16 @@ public class Triggerbot {
             return;
         }
 
-        // CHẶN KHI ĐANG ĂN UỐNG HOẶC MỞ KHO ĐỒ (Inventory / Container Screen)
+        // Chặn tuyệt đối khi đang ăn uống hoặc mở giao diện kho đồ (tránh bị hệ thống packet check bắt)
         if (client.player.isUsingItem() || client.currentScreen != null) {
             resetState();
             return;
         }
 
-        // Kiểm tra thời gian không giao tranh (10 giây = 200 ticks hệ thống)
+        // Reset trạng thái sau 10 giây (200 ticks) không giao tranh để mô phỏng sự thả lỏng tâm lý
         long currentTime = System.currentTimeMillis();
         if (currentTime - lastCombatTime > 10000) {
-            hasFirstHitOccurred = false; // Reset trạng thái phát đánh đầu tiên sau 10 giây im ắng
+            hasFirstHitOccurred = false;
             comboCounter = 0;
         }
 
@@ -64,23 +64,20 @@ public class Triggerbot {
             return;
         }
 
-        // Cập nhật thời điểm có mục tiêu trong tầm ngắm
         lastCombatTime = currentTime;
-
         float cooldown = client.player.getAttackCooldownProgress(0.5f);
         
         if (cooldown >= 0.95f) {
-            // XỬ LÝ DELAY CHO PHÁT ĐÁNH ĐẦU TIÊN (Khi mới bắt đầu lia trúng địch)
+            // Xử lý độ trễ nhận thức cho cú đánh đầu tiên khi vừa tiếp cận địch
             if (!hasFirstHitOccurred) {
                 if (firstHitDelayTicks == 0) {
-                    // Random độ trễ từ 4 đến 9 ticks trước khi tung đòn đầu tiên để mô phỏng thời gian phản xạ nhận thức
-                    firstHitDelayTicks = 4 + RANDOM.nextInt(6);
+                    firstHitDelayTicks = 5 + RANDOM.nextInt(7); // Trễ từ 5 đến 11 ticks cho lần đánh mở màn
                     firstHitCounter = 0;
                 }
 
                 firstHitCounter++;
                 if (firstHitCounter < firstHitDelayTicks) {
-                    return; // Đang chờ hết thời gian delay phát đánh đầu tiên
+                    return;
                 }
 
                 hasFirstHitOccurred = true;
@@ -91,7 +88,8 @@ public class Triggerbot {
             currentTickCount++;
 
             if (nextActionDelay == 0) {
-                nextActionDelay = 1 + (RANDOM.nextDouble() < 0.7 ? RANDOM.nextInt(3) : RANDOM.nextInt(4));
+                // Phân phối entropy click ngẫu nhiên mô phỏng sự dao động CPS thần kinh con người
+                nextActionDelay = 1 + (RANDOM.nextDouble() < 0.65 ? RANDOM.nextInt(3) : RANDOM.nextInt(6));
             }
 
             if (currentTickCount < nextActionDelay) {
@@ -102,11 +100,12 @@ public class Triggerbot {
             nextActionDelay = 0;
             comboCounter++;
 
-            // Tỷ lệ đánh hụt ngẫu nhiên liên kết Aim & Triggerbot
-            float missProbability = Math.min(0.22f, 0.12f + (comboCounter * 0.01f));
-            if (RANDOM.nextFloat() < missProbability) {
-                float missYaw = (RANDOM.nextFloat() - 0.5f) * 8.0f;
-                float missPitch = (RANDOM.nextFloat() - 0.5f) * 4.0f;
+            // DYNAMIC DATA POISONING / HUMAN MISS RATE:
+            // Tỷ lệ đánh hụt tăng dần theo chuỗi combo (từ 16% lên tối đa 28%) để qua mặt AI phân tích độ chính xác tuyệt đối (Hit Rate Consistency)
+            float dynamicMissRate = Math.min(0.28f, 0.16f + (comboCounter * 0.012f));
+            if (RANDOM.nextFloat() < dynamicMissRate) {
+                float missYaw = (float) ((RANDOM.nextGaussian() * 3.5) + ((RANDOM.nextFloat() - 0.5f) * 9.0f));
+                float missPitch = (float) ((RANDOM.nextGaussian() * 2.0) + ((RANDOM.nextFloat() - 0.5f) * 5.0f));
 
                 client.player.setYaw(client.player.getYaw() + missYaw);
                 client.player.setPitch(MathHelper.clamp(client.player.getPitch() + missPitch, -90.0f, 90.0f));
@@ -129,6 +128,5 @@ public class Triggerbot {
         currentTickCount = 0;
         firstHitDelayTicks = 0;
         firstHitCounter = 0;
-        // Không reset hoàn toàn hasFirstHitOccurred ngay lập tức ở đây để tránh giật cục khi nhấc tâm ngắm ra khỏi người địch trong tích tắc
     }
 }
