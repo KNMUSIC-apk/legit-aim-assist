@@ -13,17 +13,17 @@ public class AimAssist {
     public static boolean enabled = false;
 
     private static final double RANGE = 4.5;
-    private static final double MAX_FOV = 32.0;
     private static final Random RANDOM = new Random();
 
     private static AbstractClientPlayerEntity currentTarget = null;
     private static int targetLockTicks = 0;
     
-    // Các biến giả lập độ trễ nhận thức và trôi tự nhiên của cơ bắp tay người
+    // Biến mô phỏng trôi tự nhiên, độ trễ chuyển mục tiêu và độ mỏi chiến đấu
     private static double dynamicOffsetX = 0.0;
     private static double dynamicOffsetY = 0.0;
     private static int swayTimer = 0;
-    private static int reactionLagTicks = 0; // Độ trễ phản xạ khi đổi mục tiêu
+    private static int reactionLagTicks = 0;
+    private static int sustainedCombatTicks = 0;
 
     public static void onClientTick(MinecraftClient client) {
         if (!enabled || client.player == null || client.world == null) {
@@ -32,6 +32,18 @@ public class AimAssist {
         }
 
         PlayerEntity player = client.player;
+
+        // Chặn khi đang ăn uống hoặc mở giao diện
+        if (player.isUsingItem() || client.currentScreen != null) {
+            resetAimState();
+            return;
+        }
+
+        // BẢO VỆ VELOCITY: Nếu người chơi đang quay chuột cực nhanh bằng tay, tạm ngưng can thiệp
+        float playerVelocityDelta = Math.abs(player.getYaw() - player.prevYaw) + Math.abs(player.getPitch() - player.prevPitch);
+        if (playerVelocityDelta > 14.0f) {
+            return;
+        }
 
         // Chỉ kích hoạt khi cầm Kiếm hoặc Rìu
         String itemId = Registries.ITEM
@@ -44,22 +56,35 @@ public class AimAssist {
             return;
         }
 
-        // Quản lý mục tiêu thông minh với độ trễ chuyển đổi (Cognitive Switch Lag)
+        // COMBT FATIGUE & MICRO-PAUSES: Giả lập độ mỏi khi combat kéo dài liên tục
+        if (sustainedCombatTicks > 160) { // Sau ~8 giây combat liên tục
+            if (RANDOM.nextFloat() < 0.1f) {
+                sustainedCombatTicks = -45; // Tạm nghỉ ngơi trong ~2.2 giây không aim
+                currentTarget = null;
+                return;
+            }
+        } else if (sustainedCombatTicks < 0) {
+            sustainedCombatTicks++;
+            return;
+        }
+        sustainedCombatTicks++;
+
+        // Quản lý mục tiêu thông minh
         if (currentTarget == null || !currentTarget.isAlive() || currentTarget.isSpectator() || currentTarget.isRemoved() || player.distanceTo(currentTarget) > RANGE) {
             if (RANDOM.nextFloat() < 0.25f) {
                 currentTarget = findBestTarget(player, client);
                 targetLockTicks = 0;
-                reactionLagTicks = 2 + RANDOM.nextInt(5); // Mô phỏng thời gian não bộ nhận diện mục tiêu mới (2-6 ticks)
+                reactionLagTicks = 2 + RANDOM.nextInt(4);
                 resetOffsets();
             }
         }
 
         if (currentTarget == null) {
             targetLockTicks = 0;
+            sustainedCombatTicks = Math.max(0, sustainedCombatTicks - 2);
             return;
         }
 
-        // Nếu đang trong độ trễ phản xạ nhận thức, tạm thời chưa can thiệp aim để đánh lừa AI phân tích Target Acquisition
         if (reactionLagTicks > 0) {
             reactionLagTicks--;
             return;
@@ -68,11 +93,10 @@ public class AimAssist {
         targetLockTicks++;
         swayTimer++;
 
-        // Tiêm nhiễu trôi dạt tự nhiên (Data Poisoning / Natural Drift) để phá vỡ cấu trúc AI feature windows
-        if (swayTimer > 12 + RANDOM.nextInt(14)) {
+        if (swayTimer > 12 + RANDOM.nextInt(12)) {
             swayTimer = 0;
-            dynamicOffsetX = (RANDOM.nextDouble() - 0.5) * 0.22; 
-            dynamicOffsetY = (RANDOM.nextDouble() - 0.5) * 0.15; 
+            dynamicOffsetX = (RANDOM.nextDouble() - 0.5) * 0.20; 
+            dynamicOffsetY = (RANDOM.nextDouble() - 0.5) * 0.14; 
         }
 
         double targetX = currentTarget.getX() + dynamicOffsetX;
@@ -83,7 +107,12 @@ public class AimAssist {
         double dy = targetY - player.getEyeY();
         double dz = targetZ - player.getZ();
 
+        double distance = player.distanceTo(currentTarget);
         double horizontalDistance = Math.sqrt(dx * dx + dz * dz);
+        
+        // ADAPTIVE FOV: Tự động co giãn tầm nhìn linh hoạt theo khoảng cách thực tế tới đối thủ
+        double dynamicFov = Math.max(16.0, 36.0 - (distance * 3.5));
+
         float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
         float targetPitch = (float) (-Math.toDegrees(Math.atan2(dy, horizontalDistance)));
 
@@ -91,23 +120,20 @@ public class AimAssist {
         float pitchDiff = targetPitch - player.getPitch();
 
         double totalAngle = Math.abs(yawDiff) + Math.abs(pitchDiff);
-        if (totalAngle > MAX_FOV || totalAngle < 0.18) {
+        if (totalAngle > dynamicFov || totalAngle < 0.18) {
             return;
         }
 
-        // Mô phỏng biến thiên phân phối chuẩn (Gaussian-like variation) cho hệ thống mượt thay vì hằng số tuyến tính
-        double gaussianLikeFactor = RANDOM.nextGaussian() * 0.03 + 0.11;
-        float accelerationFactor = Math.min(1.0f, targetLockTicks / 15.0f);
+        double gaussianLikeFactor = RANDOM.nextGaussian() * 0.025 + 0.12;
+        float accelerationFactor = Math.min(1.0f, targetLockTicks / 14.0f);
         float baseSmoothing = (float) Math.max(0.06, gaussianLikeFactor) * accelerationFactor;
 
-        // Nhiễu vi mô sinh lý (High-Entropy Micro-Jitter) bẻ gãy đạo hàm cấp 2 và gia tốc góc (Rotation Acceleration)
-        float yawNoise = (float) ((RANDOM.nextGaussian() * 0.25) + ((RANDOM.nextFloat() - 0.5f) * 0.35f));
-        float pitchNoise = (float) ((RANDOM.nextGaussian() * 0.15) + ((RANDOM.nextFloat() - 0.5f) * 0.25f));
+        float yawNoise = (float) ((RANDOM.nextGaussian() * 0.22) + ((RANDOM.nextFloat() - 0.5f) * 0.3f));
+        float pitchNoise = (float) ((RANDOM.nextGaussian() * 0.12) + ((RANDOM.nextFloat() - 0.5f) * 0.2f));
 
         float appliedYaw = yawDiff * baseSmoothing + yawNoise;
         float appliedPitch = pitchDiff * baseSmoothing + pitchNoise;
 
-        // Giới hạn Delta nghiêm ngặt chống quét bất thường
         appliedYaw = MathHelper.clamp(appliedYaw, -4.8f, 4.8f);
         appliedPitch = MathHelper.clamp(appliedPitch, -2.8f, 2.8f);
 
@@ -123,7 +149,7 @@ public class AimAssist {
 
     private static AbstractClientPlayerEntity findBestTarget(PlayerEntity player, MinecraftClient client) {
         AbstractClientPlayerEntity best = null;
-        double minAngle = MAX_FOV;
+        double minAngle = 35.0;
 
         for (AbstractClientPlayerEntity candidate : client.world.getPlayers()) {
             if (candidate == player || !candidate.isAlive() || candidate.isSpectator() || candidate.isRemoved()) {
@@ -152,6 +178,7 @@ public class AimAssist {
         currentTarget = null;
         targetLockTicks = 0;
         reactionLagTicks = 0;
+        sustainedCombatTicks = 0;
         resetOffsets();
     }
 
