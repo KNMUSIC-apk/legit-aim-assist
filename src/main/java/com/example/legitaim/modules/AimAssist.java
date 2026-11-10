@@ -11,32 +11,44 @@ public class AimAssist {
 
     public static boolean enabled = false;
 
-    private static final double RANGE = 4.5;
-    private static final double MAX_FOV = 35.0; // Giới hạn vùng quét tầm nhìn để tránh xoay người góc rộng bất thường
+    private static final double RANGE = 4.2;
+    private static final double MAX_FOV = 30.0;
     private static final Random RANDOM = new Random();
 
     private static AbstractClientPlayerEntity currentTarget = null;
+    private static int targetLockTicks = 0;
+    
+    // Biến mô phỏng sự dao động tâm lý / độ trễ phản xạ tự nhiên của con người
+    private static double humanReactionOffset = 0.0;
 
     public static void onClientTick(MinecraftClient client) {
         if (!enabled || client.player == null || client.world == null) {
             currentTarget = null;
+            targetLockTicks = 0;
             return;
         }
 
         PlayerEntity player = client.player;
 
-        // 1. Quản lý mục tiêu thông minh, chống đổi mục tiêu đột ngột (Target Switching Smoothing)
+        // Quản lý mục tiêu với độ trễ chuyển đổi (Target Acquisition Analysis)
         if (currentTarget == null || !currentTarget.isAlive() || currentTarget.isSpectator() || currentTarget.isRemoved() || player.distanceTo(currentTarget) > RANGE) {
-            currentTarget = findBestTarget(player, client);
+            if (RANDOM.nextFloat() < 0.25f) { // Không switch ngay lập tức khi có người mới, tạo độ trễ nhận thức
+                currentTarget = findBestTarget(player, client);
+                targetLockTicks = 0;
+                humanReactionOffset = (RANDOM.nextDouble() - 0.5) * 0.15;
+            }
         }
 
         if (currentTarget == null) {
+            targetLockTicks = 0;
             return;
         }
 
-        // 2. Tính toán góc lệch hướng tới mục tiêu (Vùng ngực/thân trên để tự nhiên hơn)
+        targetLockTicks++;
+
+        // Tính toán tọa độ vị trí mục tiêu (Aim vào thân/ngực với độ lệch tự nhiên thay vì tâm tuyệt đối)
         double dx = currentTarget.getX() - player.getX();
-        double dy = (currentTarget.getY() + currentTarget.getHeight() * 0.65) - player.getEyeY();
+        double dy = (currentTarget.getY() + currentTarget.getHeight() * (0.55 + humanReactionOffset)) - player.getEyeY();
         double dz = currentTarget.getZ() - player.getZ();
 
         double horizontalDistance = Math.sqrt(dx * dx + dz * dz);
@@ -46,26 +58,26 @@ public class AimAssist {
         float yawDiff = MathHelper.wrapDegrees(targetYaw - player.getYaw());
         float pitchDiff = targetPitch - player.getPitch();
 
-        // Kiểm tra góc nhìn FOV: Không can thiệp nếu mục tiêu quá lệch tâm hoặc đã ngắm rất sát
         double totalAngle = Math.abs(yawDiff) + Math.abs(pitchDiff);
-        if (totalAngle > MAX_FOV || totalAngle < 0.4) {
+        if (totalAngle > MAX_FOV || totalAngle < 0.2) {
             return;
         }
 
-        // 3. Phá vỡ các đặc điểm thống kê và mẫu lặp lại bằng Dynamic Smoothing & Noise Jitter
-        // Thay vì dùng một giá trị cố định[span_2](start_span)[span_2](end_span),smoothing dao động ngẫu nhiên theo thời gian thực
-        float baseSmoothing = 0.11f + RANDOM.nextFloat() * 0.09f; 
+        // Chống phân tích Rotation Consistency & Smoothing tuyến tính:
+        // Sử dụng hệ số mượt biến thiên theo thời gian khóa mục tiêu (Mô phỏng tay người bắt nhịp dần)
+        float accelerationFactor = Math.min(1.0f, targetLockTicks / 15.0f);
+        float baseSmoothing = (0.08f + RANDOM.nextFloat() * 0.07f) * accelerationFactor;
 
-        // Thêm nhiễu ngẫu nhiên mô phỏng tay người thật (Human Jitter) chống phát hiện thống kê rotation
-        float yawNoise = (RANDOM.nextFloat() - 0.5f) * 0.3f;
-        float pitchNoise = (RANDOM.nextFloat() - 0.5f) * 0.3f;
+        // Thêm nhiễu vi mô (Micro-Jitter) để phá vỡ entropy thống kê góc quay
+        float yawNoise = (RANDOM.nextFloat() - 0.5f) * 0.4f;
+        float pitchNoise = (RANDOM.nextFloat() - 0.5f) * 0.4f;
 
         float appliedYaw = yawDiff * baseSmoothing + yawNoise;
         float appliedPitch = pitchDiff * baseSmoothing + pitchNoise;
 
-        // 4. Giới hạn Rotation Delta và Acceleration để chống thay đổi góc nhìn/flick đột ngột
-        appliedYaw = MathHelper.clamp(appliedYaw, -5.5f, 5.5f);
-        appliedPitch = MathHelper.clamp(appliedPitch, -3.5f, 3.5f);
+        // Giới hạn Rotation Delta và Acceleration nghiêm ngặt
+        appliedYaw = MathHelper.clamp(appliedYaw, -4.5f, 4.5f);
+        appliedPitch = MathHelper.clamp(appliedPitch, -2.5f, 2.5f);
 
         player.setYaw(player.getYaw() + appliedYaw);
         player.setPitch(
@@ -82,10 +94,7 @@ public class AimAssist {
         double minAngle = MAX_FOV;
 
         for (AbstractClientPlayerEntity candidate : client.world.getPlayers()) {
-            if (candidate == player
-                    || !candidate.isAlive()
-                    || candidate.isSpectator()
-                    || candidate.isRemoved()) {
+            if (candidate == player || !candidate.isAlive() || candidate.isSpectator() || candidate.isRemoved()) {
                 continue;
             }
 
@@ -94,7 +103,6 @@ public class AimAssist {
                 continue;
             }
 
-            // Ưu tiên chọn mục tiêu có góc lệch tâm màn hình nhỏ nhất thay vì chỉ dựa vào khoảng cách thuần túy
             double dx = candidate.getX() - player.getX();
             double dz = candidate.getZ() - player.getZ();
             float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
