@@ -18,12 +18,15 @@ public class AimAssist {
     private static AbstractClientPlayerEntity currentTarget = null;
     private static int targetLockTicks = 0;
     
-    // Biến mô phỏng trôi tự nhiên, độ trễ chuyển mục tiêu và độ mỏi chiến đấu
     private static double dynamicOffsetX = 0.0;
     private static double dynamicOffsetY = 0.0;
     private static int swayTimer = 0;
     private static int reactionLagTicks = 0;
     private static int sustainedCombatTicks = 0;
+
+    // Biến lưu trữ góc nhìn của tick trước để tính vận tốc quay chuột
+    private static float lastYaw = 0.0f;
+    private static float lastPitch = 0.0f;
 
     public static void onClientTick(MinecraftClient client) {
         if (!enabled || client.player == null || client.world == null) {
@@ -33,19 +36,20 @@ public class AimAssist {
 
         PlayerEntity player = client.player;
 
-        // Chặn khi đang ăn uống hoặc mở giao diện
         if (player.isUsingItem() || client.currentScreen != null) {
             resetAimState();
             return;
         }
 
-        // BẢO VỆ VELOCITY: Nếu người chơi đang quay chuột cực nhanh bằng tay, tạm ngưng can thiệp
-        float playerVelocityDelta = Math.abs(player.getYaw() - player.prevYaw) + Math.abs(player.getPitch() - player.prevPitch);
+        // Tính delta vận tốc dựa trên góc nhìn tick trước
+        float playerVelocityDelta = Math.abs(player.getYaw() - lastYaw) + Math.abs(player.getPitch() - lastPitch);
+        lastYaw = player.getYaw();
+        lastPitch = player.getPitch();
+
         if (playerVelocityDelta > 14.0f) {
             return;
         }
 
-        // Chỉ kích hoạt khi cầm Kiếm hoặc Rìu
         String itemId = Registries.ITEM
                 .getId(player.getMainHandStack().getItem())
                 .getPath();
@@ -56,10 +60,9 @@ public class AimAssist {
             return;
         }
 
-        // COMBT FATIGUE & MICRO-PAUSES: Giả lập độ mỏi khi combat kéo dài liên tục
-        if (sustainedCombatTicks > 160) { // Sau ~8 giây combat liên tục
+        if (sustainedCombatTicks > 160) {
             if (RANDOM.nextFloat() < 0.1f) {
-                sustainedCombatTicks = -45; // Tạm nghỉ ngơi trong ~2.2 giây không aim
+                sustainedCombatTicks = -45;
                 currentTarget = null;
                 return;
             }
@@ -69,7 +72,6 @@ public class AimAssist {
         }
         sustainedCombatTicks++;
 
-        // Quản lý mục tiêu thông minh
         if (currentTarget == null || !currentTarget.isAlive() || currentTarget.isSpectator() || currentTarget.isRemoved() || player.distanceTo(currentTarget) > RANGE) {
             if (RANDOM.nextFloat() < 0.25f) {
                 currentTarget = findBestTarget(player, client);
@@ -110,7 +112,6 @@ public class AimAssist {
         double distance = player.distanceTo(currentTarget);
         double horizontalDistance = Math.sqrt(dx * dx + dz * dz);
         
-        // ADAPTIVE FOV: Tự động co giãn tầm nhìn linh hoạt theo khoảng cách thực tế tới đối thủ
         double dynamicFov = Math.max(16.0, 36.0 - (distance * 3.5));
 
         float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
@@ -145,6 +146,10 @@ public class AimAssist {
                         90.0f
                 )
         );
+        
+        // Cập nhật lại lastYaw/lastPitch sau khi mod thay đổi góc nhìn
+        lastYaw = player.getYaw();
+        lastPitch = player.getPitch();
     }
 
     private static AbstractClientPlayerEntity findBestTarget(PlayerEntity player, MinecraftClient client) {
