@@ -13,16 +13,17 @@ public class AimAssist {
     public static boolean enabled = false;
 
     private static final double RANGE = 4.5;
-    private static final double MAX_FOV = 35.0;
+    private static final double MAX_FOV = 32.0;
     private static final Random RANDOM = new Random();
 
     private static AbstractClientPlayerEntity currentTarget = null;
     private static int targetLockTicks = 0;
     
-    // Giảm biên độ trôi và siết chặt tâm ngắm hơn một chút so với trước
+    // Các biến giả lập độ trễ nhận thức và trôi tự nhiên của cơ bắp tay người
     private static double dynamicOffsetX = 0.0;
     private static double dynamicOffsetY = 0.0;
     private static int swayTimer = 0;
+    private static int reactionLagTicks = 0; // Độ trễ phản xạ khi đổi mục tiêu
 
     public static void onClientTick(MinecraftClient client) {
         if (!enabled || client.player == null || client.world == null) {
@@ -32,6 +33,7 @@ public class AimAssist {
 
         PlayerEntity player = client.player;
 
+        // Chỉ kích hoạt khi cầm Kiếm hoặc Rìu
         String itemId = Registries.ITEM
                 .getId(player.getMainHandStack().getItem())
                 .getPath();
@@ -42,10 +44,12 @@ public class AimAssist {
             return;
         }
 
+        // Quản lý mục tiêu thông minh với độ trễ chuyển đổi (Cognitive Switch Lag)
         if (currentTarget == null || !currentTarget.isAlive() || currentTarget.isSpectator() || currentTarget.isRemoved() || player.distanceTo(currentTarget) > RANGE) {
-            if (RANDOM.nextFloat() < 0.3f) {
+            if (RANDOM.nextFloat() < 0.25f) {
                 currentTarget = findBestTarget(player, client);
                 targetLockTicks = 0;
+                reactionLagTicks = 2 + RANDOM.nextInt(5); // Mô phỏng thời gian não bộ nhận diện mục tiêu mới (2-6 ticks)
                 resetOffsets();
             }
         }
@@ -55,18 +59,24 @@ public class AimAssist {
             return;
         }
 
+        // Nếu đang trong độ trễ phản xạ nhận thức, tạm thời chưa can thiệp aim để đánh lừa AI phân tích Target Acquisition
+        if (reactionLagTicks > 0) {
+            reactionLagTicks--;
+            return;
+        }
+
         targetLockTicks++;
         swayTimer++;
 
-        // Thu nhỏ biên độ lệch để lực hút tâm mạnh hơn nhưng vẫn giữ độ tự nhiên
-        if (swayTimer > 15 + RANDOM.nextInt(10)) {
+        // Tiêm nhiễu trôi dạt tự nhiên (Data Poisoning / Natural Drift) để phá vỡ cấu trúc AI feature windows
+        if (swayTimer > 12 + RANDOM.nextInt(14)) {
             swayTimer = 0;
-            dynamicOffsetX = (RANDOM.nextDouble() - 0.5) * 0.18; 
-            dynamicOffsetY = (RANDOM.nextDouble() - 0.5) * 0.12; 
+            dynamicOffsetX = (RANDOM.nextDouble() - 0.5) * 0.22; 
+            dynamicOffsetY = (RANDOM.nextDouble() - 0.5) * 0.15; 
         }
 
         double targetX = currentTarget.getX() + dynamicOffsetX;
-        double targetY = (currentTarget.getY() + currentTarget.getHeight() * 0.62) + dynamicOffsetY;
+        double targetY = (currentTarget.getY() + currentTarget.getHeight() * 0.58) + dynamicOffsetY;
         double targetZ = currentTarget.getZ() + dynamicOffsetX;
 
         double dx = targetX - player.getX();
@@ -81,22 +91,25 @@ public class AimAssist {
         float pitchDiff = targetPitch - player.getPitch();
 
         double totalAngle = Math.abs(yawDiff) + Math.abs(pitchDiff);
-        if (totalAngle > MAX_FOV || totalAngle < 0.15) {
+        if (totalAngle > MAX_FOV || totalAngle < 0.18) {
             return;
         }
 
-        // Tăng nhẹ hệ số mượt (baseSmoothing) để phản hồi nhanh và chặt chẽ hơn
-        float accelerationFactor = Math.min(1.0f, targetLockTicks / 12.0f);
-        float baseSmoothing = (0.12f + RANDOM.nextFloat() * 0.08f) * accelerationFactor;
+        // Mô phỏng biến thiên phân phối chuẩn (Gaussian-like variation) cho hệ thống mượt thay vì hằng số tuyến tính
+        double gaussianLikeFactor = RANDOM.nextGaussian() * 0.03 + 0.11;
+        float accelerationFactor = Math.min(1.0f, targetLockTicks / 15.0f);
+        float baseSmoothing = (float) Math.max(0.06, gaussianLikeFactor) * accelerationFactor;
 
-        float yawNoise = (RANDOM.nextFloat() - 0.5f) * 0.25f;
-        float pitchNoise = (RANDOM.nextFloat() - 0.5f) * 0.20f;
+        // Nhiễu vi mô sinh lý (High-Entropy Micro-Jitter) bẻ gãy đạo hàm cấp 2 và gia tốc góc (Rotation Acceleration)
+        float yawNoise = (float) ((RANDOM.nextGaussian() * 0.25) + ((RANDOM.nextFloat() - 0.5f) * 0.35f));
+        float pitchNoise = (float) ((RANDOM.nextGaussian() * 0.15) + ((RANDOM.nextFloat() - 0.5f) * 0.25f));
 
         float appliedYaw = yawDiff * baseSmoothing + yawNoise;
         float appliedPitch = pitchDiff * baseSmoothing + pitchNoise;
 
-        appliedYaw = MathHelper.clamp(appliedYaw, -5.5f, 5.5f);
-        appliedPitch = MathHelper.clamp(appliedPitch, -3.2f, 3.2f);
+        // Giới hạn Delta nghiêm ngặt chống quét bất thường
+        appliedYaw = MathHelper.clamp(appliedYaw, -4.8f, 4.8f);
+        appliedPitch = MathHelper.clamp(appliedPitch, -2.8f, 2.8f);
 
         player.setYaw(player.getYaw() + appliedYaw);
         player.setPitch(
@@ -138,6 +151,7 @@ public class AimAssist {
     private static void resetAimState() {
         currentTarget = null;
         targetLockTicks = 0;
+        reactionLagTicks = 0;
         resetOffsets();
     }
 
