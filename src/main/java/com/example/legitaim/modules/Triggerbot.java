@@ -18,7 +18,6 @@ public class Triggerbot {
     private static int currentTickCount = 0;
     private static int comboCounter = 0;
 
-    // Giảm độ trễ phát đánh đầu tiên xuống mức siêu ngắn (nhanh và nhạy hơn)
     private static boolean hasFirstHitOccurred = false;
     private static int firstHitDelayTicks = 0;
     private static int firstHitCounter = 0;
@@ -30,9 +29,15 @@ public class Triggerbot {
             return;
         }
 
-        // Chặn khi đang ăn uống hoặc mở kho đồ
+        // Chặn tuyệt đối khi ăn uống hoặc mở hòm đồ
         if (client.player.isUsingItem() || client.currentScreen != null) {
             resetState();
+            return;
+        }
+
+        // Kiểm tra vận tốc quay chuột tay, không tấn công khi đang văng chuột đột ngột
+        float playerVelocityDelta = Math.abs(client.player.getYaw() - client.player.prevYaw) + Math.abs(client.player.getPitch() - client.player.prevPitch);
+        if (playerVelocityDelta > 15.0f) {
             return;
         }
 
@@ -68,10 +73,10 @@ public class Triggerbot {
         float cooldown = client.player.getAttackCooldownProgress(0.5f);
         
         if (cooldown >= 0.95f) {
-            // Xử lý delay cực ngắn cho phát đánh đầu tiên (chỉ từ 1 đến 3 ticks)
+            // Delay siêu ngắn (1-3 ticks) cho phát đánh đầu tiên
             if (!hasFirstHitOccurred) {
                 if (firstHitDelayTicks == 0) {
-                    firstHitDelayTicks = 1 + RANDOM.nextInt(3); // Giảm mạnh thời gian chờ ban đầu
+                    firstHitDelayTicks = 1 + RANDOM.nextInt(3);
                     firstHitCounter = 0;
                 }
 
@@ -88,7 +93,7 @@ public class Triggerbot {
             currentTickCount++;
 
             if (nextActionDelay == 0) {
-                nextActionDelay = 1 + (RANDOM.nextDouble() < 0.7 ? RANDOM.nextInt(2) : RANDOM.nextInt(4));
+                nextActionDelay = 1 + (RANDOM.nextDouble() < 0.7 ? RANDOM.nextInt(2) : RANDOM.nextInt(5));
             }
 
             if (currentTickCount < nextActionDelay) {
@@ -99,7 +104,7 @@ public class Triggerbot {
             nextActionDelay = 0;
             comboCounter++;
 
-            // Tỷ lệ đánh hụt động để lừa AI anti-cheat
+            // Tỷ lệ đánh hụt động (Dynamic Miss Rate) để đánh lừa AI Anti-Cheat
             float dynamicMissRate = Math.min(0.28f, 0.16f + (comboCounter * 0.012f));
             if (RANDOM.nextFloat() < dynamicMissRate) {
                 float missYaw = (float) ((RANDOM.nextGaussian() * 3.0) + ((RANDOM.nextFloat() - 0.5f) * 8.0f));
