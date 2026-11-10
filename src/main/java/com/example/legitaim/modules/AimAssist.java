@@ -18,15 +18,15 @@ public class AimAssist {
     private static AbstractClientPlayerEntity currentTarget = null;
     private static int targetLockTicks = 0;
     
-    private static double dynamicOffsetX = 0.0;
-    private static double dynamicOffsetY = 0.0;
-    private static int swayTimer = 0;
+    // Duy trì chiều cao ngắm theo thao tác kéo chuột thực tế của người chơi (Không tự động giật ngược lên đầu)
+    private static double bodyHeightFactor = 0.75; 
     private static int reactionLagTicks = 0;
     private static int sustainedCombatTicks = 0;
 
-    // Biến lưu trữ góc nhìn của tick trước để tính vận tốc quay chuột
     private static float lastYaw = 0.0f;
     private static float lastPitch = 0.0f;
+    private static float prevPlayerYaw = 0.0f;
+    private static float prevPlayerPitch = 0.0f;
 
     public static void onClientTick(MinecraftClient client) {
         if (!enabled || client.player == null || client.world == null) {
@@ -41,13 +41,24 @@ public class AimAssist {
             return;
         }
 
-        // Tính delta vận tốc dựa trên góc nhìn tick trước
-        float playerVelocityDelta = Math.abs(player.getYaw() - lastYaw) + Math.abs(player.getPitch() - lastPitch);
+        // Theo dõi chuyển động tay thực tế của người chơi
+        float manualYawDelta = player.getYaw() - prevPlayerYaw;
+        float manualPitchDelta = player.getPitch() - prevPlayerPitch;
+
+        prevPlayerYaw = player.getYaw();
+        prevPlayerPitch = player.getPitch();
+
+        // Nếu người chơi tự kéo chuột, cập nhật mốc độ cao theo tay họ và giữ nguyên
+        if (Math.abs(manualPitchDelta) > 0.15f && currentTarget != null) {
+            bodyHeightFactor = MathHelper.clamp(bodyHeightFactor - (manualPitchDelta * 0.02), 0.25, 0.90);
+        }
+
+        float playerVelocityDelta = Math.abs(manualYawDelta) + Math.abs(manualPitchDelta);
         lastYaw = player.getYaw();
         lastPitch = player.getPitch();
 
-        if (playerVelocityDelta > 14.0f) {
-            return;
+        if (playerVelocityDelta > 16.0f) {
+            return; // Nhường hoàn toàn quyền kiểm soát khi người chơi vẩy chuột mạnh
         }
 
         String itemId = Registries.ITEM
@@ -60,9 +71,12 @@ public class AimAssist {
             return;
         }
 
-        if (sustainedCombatTicks > 160) {
-            if (RANDOM.nextFloat() < 0.1f) {
-                sustainedCombatTicks = -45;
+        boolean isLowHealth = player.getHealth() < 10.0f;
+        int maxCombatTicks = isLowHealth ? 90 : 160;
+
+        if (sustainedCombatTicks > maxCombatTicks) {
+            if (RANDOM.nextFloat() < 0.15f) {
+                sustainedCombatTicks = -50;
                 currentTarget = null;
                 return;
             }
@@ -73,11 +87,11 @@ public class AimAssist {
         sustainedCombatTicks++;
 
         if (currentTarget == null || !currentTarget.isAlive() || currentTarget.isSpectator() || currentTarget.isRemoved() || player.distanceTo(currentTarget) > RANGE) {
-            if (RANDOM.nextFloat() < 0.25f) {
+            if (RANDOM.nextFloat() < 0.3f) {
                 currentTarget = findBestTarget(player, client);
                 targetLockTicks = 0;
-                reactionLagTicks = 2 + RANDOM.nextInt(4);
-                resetOffsets();
+                reactionLagTicks = 2 + RANDOM.nextInt(3);
+                bodyHeightFactor = 0.70 + (RANDOM.nextDouble() * 0.15);
             }
         }
 
@@ -93,17 +107,10 @@ public class AimAssist {
         }
 
         targetLockTicks++;
-        swayTimer++;
 
-        if (swayTimer > 12 + RANDOM.nextInt(12)) {
-            swayTimer = 0;
-            dynamicOffsetX = (RANDOM.nextDouble() - 0.5) * 0.20; 
-            dynamicOffsetY = (RANDOM.nextDouble() - 0.5) * 0.14; 
-        }
-
-        double targetX = currentTarget.getX() + dynamicOffsetX;
-        double targetY = (currentTarget.getY() + currentTarget.getHeight() * 0.58) + dynamicOffsetY;
-        double targetZ = currentTarget.getZ() + dynamicOffsetX;
+        double targetX = currentTarget.getX();
+        double targetY = currentTarget.getY() + (currentTarget.getHeight() * bodyHeightFactor);
+        double targetZ = currentTarget.getZ();
 
         double dx = targetX - player.getX();
         double dy = targetY - player.getEyeY();
@@ -112,7 +119,7 @@ public class AimAssist {
         double distance = player.distanceTo(currentTarget);
         double horizontalDistance = Math.sqrt(dx * dx + dz * dz);
         
-        double dynamicFov = Math.max(16.0, 36.0 - (distance * 3.5));
+        double dynamicFov = Math.max(15.0, 34.0 - (distance * 3.0));
 
         float targetYaw = (float) (Math.toDegrees(Math.atan2(dz, dx)) - 90.0);
         float targetPitch = (float) (-Math.toDegrees(Math.atan2(dy, horizontalDistance)));
@@ -121,22 +128,22 @@ public class AimAssist {
         float pitchDiff = targetPitch - player.getPitch();
 
         double totalAngle = Math.abs(yawDiff) + Math.abs(pitchDiff);
-        if (totalAngle > dynamicFov || totalAngle < 0.18) {
+        if (totalAngle > dynamicFov || totalAngle < 0.12) {
             return;
         }
 
-        double gaussianLikeFactor = RANDOM.nextGaussian() * 0.025 + 0.12;
-        float accelerationFactor = Math.min(1.0f, targetLockTicks / 14.0f);
-        float baseSmoothing = (float) Math.max(0.06, gaussianLikeFactor) * accelerationFactor;
+        // Lấy hệ số mượt và nhiễu từ bảng LUT tiền tính toán (Chống AI phân tích thuật toán sinh số giả)
+        int lutIndex = targetLockTicks + RANDOM.nextInt(3);
+        float baseSmoothing = HumanMotionLUT.getSmoothing(lutIndex) * Math.min(1.0f, targetLockTicks / 15.0f);
 
-        float yawNoise = (float) ((RANDOM.nextGaussian() * 0.22) + ((RANDOM.nextFloat() - 0.5f) * 0.3f));
-        float pitchNoise = (float) ((RANDOM.nextGaussian() * 0.12) + ((RANDOM.nextFloat() - 0.5f) * 0.2f));
+        float yawNoise = HumanMotionLUT.getJitterYaw(lutIndex);
+        float pitchNoise = HumanMotionLUT.getJitterPitch(lutIndex);
 
-        float appliedYaw = yawDiff * baseSmoothing + yawNoise;
-        float appliedPitch = pitchDiff * baseSmoothing + pitchNoise;
+        float appliedYaw = (yawDiff * baseSmoothing) + yawNoise;
+        float appliedPitch = (pitchDiff * baseSmoothing) + pitchNoise;
 
-        appliedYaw = MathHelper.clamp(appliedYaw, -4.8f, 4.8f);
-        appliedPitch = MathHelper.clamp(appliedPitch, -2.8f, 2.8f);
+        appliedYaw = MathHelper.clamp(appliedYaw, -3.2f, 3.2f);
+        appliedPitch = MathHelper.clamp(appliedPitch, -1.8f, 1.8f);
 
         player.setYaw(player.getYaw() + appliedYaw);
         player.setPitch(
@@ -147,14 +154,13 @@ public class AimAssist {
                 )
         );
         
-        // Cập nhật lại lastYaw/lastPitch sau khi mod thay đổi góc nhìn
         lastYaw = player.getYaw();
         lastPitch = player.getPitch();
     }
 
     private static AbstractClientPlayerEntity findBestTarget(PlayerEntity player, MinecraftClient client) {
         AbstractClientPlayerEntity best = null;
-        double minAngle = 35.0;
+        double minAngle = 34.0;
 
         for (AbstractClientPlayerEntity candidate : client.world.getPlayers()) {
             if (candidate == player || !candidate.isAlive() || candidate.isSpectator() || candidate.isRemoved()) {
@@ -184,12 +190,5 @@ public class AimAssist {
         targetLockTicks = 0;
         reactionLagTicks = 0;
         sustainedCombatTicks = 0;
-        resetOffsets();
-    }
-
-    private static void resetOffsets() {
-        dynamicOffsetX = 0.0;
-        dynamicOffsetY = 0.0;
-        swayTimer = 0;
     }
 }
