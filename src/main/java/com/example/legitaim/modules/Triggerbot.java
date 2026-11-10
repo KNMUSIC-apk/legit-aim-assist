@@ -23,7 +23,6 @@ public class Triggerbot {
     private static int firstHitCounter = 0;
     private static long lastCombatTime = 0;
 
-    // Biến lưu trữ góc nhìn trước để tính vận tốc
     private static float lastYaw = 0.0f;
     private static float lastPitch = 0.0f;
 
@@ -33,6 +32,7 @@ public class Triggerbot {
             return;
         }
 
+        // Chặn tuyệt đối khi đang ăn uống hoặc mở hòm đồ/inventory
         if (client.player.isUsingItem() || client.currentScreen != null) {
             resetState();
             return;
@@ -79,7 +79,7 @@ public class Triggerbot {
         if (cooldown >= 0.95f) {
             if (!hasFirstHitOccurred) {
                 if (firstHitDelayTicks == 0) {
-                    firstHitDelayTicks = 1 + RANDOM.nextInt(3);
+                    firstHitDelayTicks = 1 + RANDOM.nextInt(3); // Delay siêu ngắn cho phát đánh đầu tiên
                     firstHitCounter = 0;
                 }
 
@@ -96,7 +96,10 @@ public class Triggerbot {
             currentTickCount++;
 
             if (nextActionDelay == 0) {
-                nextActionDelay = 1 + (RANDOM.nextDouble() < 0.7 ? RANDOM.nextInt(2) : RANDOM.nextInt(5));
+                // Kết hợp phân phối Poisson và Lookup Table cho độ trễ click chuẩn con người
+                double poissonValue = -Math.log(1.0 - RANDOM.nextDouble()) * 1.5;
+                int lutDelay = HumanMotionLUT.getClickDelay(comboCounter + RANDOM.nextInt(3));
+                nextActionDelay = Math.max(1, (int) Math.round(poissonValue) + lutDelay);
             }
 
             if (currentTickCount < nextActionDelay) {
@@ -107,10 +110,11 @@ public class Triggerbot {
             nextActionDelay = 0;
             comboCounter++;
 
-            float dynamicMissRate = Math.min(0.28f, 0.16f + (comboCounter * 0.012f));
+            // Tỷ lệ đánh hụt động (Dynamic Miss Rate) để đánh lừa AI Anti-Cheat
+            float dynamicMissRate = Math.min(0.32f, 0.18f + (comboCounter * 0.015f));
             if (RANDOM.nextFloat() < dynamicMissRate) {
-                float missYaw = (float) ((RANDOM.nextGaussian() * 3.0) + ((RANDOM.nextFloat() - 0.5f) * 8.0f));
-                float missPitch = (float) ((RANDOM.nextGaussian() * 1.5) + ((RANDOM.nextFloat() - 0.5f) * 4.0f));
+                float missYaw = (float) ((RANDOM.nextGaussian() * 3.5) + ((RANDOM.nextFloat() - 0.5f) * 9.0f));
+                float missPitch = (float) ((RANDOM.nextGaussian() * 1.8) + ((RANDOM.nextFloat() - 0.5f) * 4.5f));
 
                 client.player.setYaw(client.player.getYaw() + missYaw);
                 client.player.setPitch(MathHelper.clamp(client.player.getPitch() + missPitch, -90.0f, 90.0f));
