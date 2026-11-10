@@ -23,25 +23,29 @@ public class Triggerbot {
     private static int firstHitCounter = 0;
     private static long lastCombatTime = 0;
 
+    // Biến lưu trữ góc nhìn trước để tính vận tốc
+    private static float lastYaw = 0.0f;
+    private static float lastPitch = 0.0f;
+
     public static void onClientTick(MinecraftClient client) {
         if (!enabled || client.player == null || client.world == null || client.interactionManager == null) {
             resetState();
             return;
         }
 
-        // Chặn tuyệt đối khi ăn uống hoặc mở hòm đồ
         if (client.player.isUsingItem() || client.currentScreen != null) {
             resetState();
             return;
         }
 
-        // Kiểm tra vận tốc quay chuột tay, không tấn công khi đang văng chuột đột ngột
-        float playerVelocityDelta = Math.abs(client.player.getYaw() - client.player.prevYaw) + Math.abs(client.player.getPitch() - client.player.prevPitch);
+        float playerVelocityDelta = Math.abs(client.player.getYaw() - lastYaw) + Math.abs(client.player.getPitch() - lastPitch);
+        lastYaw = client.player.getYaw();
+        lastPitch = client.player.getPitch();
+
         if (playerVelocityDelta > 15.0f) {
             return;
         }
 
-        // Reset trạng thái sau 10 giây (200 ticks) không giao tranh
         long currentTime = System.currentTimeMillis();
         if (currentTime - lastCombatTime > 10000) {
             hasFirstHitOccurred = false;
@@ -73,7 +77,6 @@ public class Triggerbot {
         float cooldown = client.player.getAttackCooldownProgress(0.5f);
         
         if (cooldown >= 0.95f) {
-            // Delay siêu ngắn (1-3 ticks) cho phát đánh đầu tiên
             if (!hasFirstHitOccurred) {
                 if (firstHitDelayTicks == 0) {
                     firstHitDelayTicks = 1 + RANDOM.nextInt(3);
@@ -104,7 +107,6 @@ public class Triggerbot {
             nextActionDelay = 0;
             comboCounter++;
 
-            // Tỷ lệ đánh hụt động (Dynamic Miss Rate) để đánh lừa AI Anti-Cheat
             float dynamicMissRate = Math.min(0.28f, 0.16f + (comboCounter * 0.012f));
             if (RANDOM.nextFloat() < dynamicMissRate) {
                 float missYaw = (float) ((RANDOM.nextGaussian() * 3.0) + ((RANDOM.nextFloat() - 0.5f) * 8.0f));
@@ -114,11 +116,17 @@ public class Triggerbot {
                 client.player.setPitch(MathHelper.clamp(client.player.getPitch() + missPitch, -90.0f, 90.0f));
                 
                 client.player.swingHand(net.minecraft.util.Hand.MAIN_HAND);
+                
+                lastYaw = client.player.getYaw();
+                lastPitch = client.player.getPitch();
                 return;
             }
 
             client.interactionManager.attackEntity(client.player, target);
             client.player.swingHand(net.minecraft.util.Hand.MAIN_HAND);
+            
+            lastYaw = client.player.getYaw();
+            lastPitch = client.player.getPitch();
         } else {
             if (cooldown < 0.2f && comboCounter > 0) {
                 comboCounter = Math.max(0, comboCounter - 1);
