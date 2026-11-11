@@ -32,12 +32,13 @@ public class Triggerbot {
             return;
         }
 
-        // Chặn tuyệt đối khi đang ăn uống hoặc mở hòm đồ/inventory
+        // Chặn tuyệt đối khi đang ăn uống, mở hòm đồ hoặc dịch chuyển giao diện
         if (client.player.isUsingItem() || client.currentScreen != null) {
             resetState();
             return;
         }
 
+        // Kiểm tra vận tốc vẩy chuột tay
         float playerVelocityDelta = Math.abs(client.player.getYaw() - lastYaw) + Math.abs(client.player.getPitch() - lastPitch);
         lastYaw = client.player.getYaw();
         lastPitch = client.player.getPitch();
@@ -74,12 +75,19 @@ public class Triggerbot {
         }
 
         lastCombatTime = currentTime;
+        
+        // Kiểm tra trạng thái hồi chiêu vũ khí (Attack Cooldown)
         float cooldown = client.player.getAttackCooldownProgress(0.5f);
         
-        if (cooldown >= 0.95f) {
+        // --- PRO-PLAYER COMBAT RHYTHM ---
+        // Nếu người chơi đang trong trạng thái rơi (nhảy chém / crit), tối ưu hóa độ nhạy tấn công
+        boolean isFallingForCrit = client.player.fallDistance > 0.0f && !client.player.isOnGround() && !client.player.isClimbing();
+        float requiredCooldown = isFallingForCrit ? 0.90f : 0.95f; // Rơi chém có thể linh hoạt sớm hơn một chút để bắt nhịp crit
+
+        if (cooldown >= requiredCooldown) {
             if (!hasFirstHitOccurred) {
                 if (firstHitDelayTicks == 0) {
-                    firstHitDelayTicks = 1 + RANDOM.nextInt(3); // Delay siêu ngắn cho phát đánh đầu tiên
+                    firstHitDelayTicks = 1 + RANDOM.nextInt(2); // Phản xạ cực nhanh cho nhát đánh mở màn
                     firstHitCounter = 0;
                 }
 
@@ -96,10 +104,13 @@ public class Triggerbot {
             currentTickCount++;
 
             if (nextActionDelay == 0) {
-                // Kết hợp phân phối Poisson và Lookup Table cho độ trễ click chuẩn con người
-                double poissonValue = -Math.log(1.0 - RANDOM.nextDouble()) * 1.5;
+                // Mô phỏng nhịp điệu tay chuyên nghiệp: kết hợp Poisson entropy và LUT cadence
+                double poissonValue = -Math.log(1.0 - RANDOM.nextDouble()) * 1.2;
                 int lutDelay = HumanMotionLUT.getClickDelay(comboCounter + RANDOM.nextInt(3));
-                nextActionDelay = Math.max(1, (int) Math.round(poissonValue) + lutDelay);
+                
+                // Nếu đang nhảy chém (crit), rút ngắn một chút độ trễ để tạo cảm giác dồn dập, chuyên nghiệp
+                int critBonus = isFallingForCrit ? -1 : 0;
+                nextActionDelay = Math.max(1, (int) Math.round(poissonValue) + lutDelay + critBonus);
             }
 
             if (currentTickCount < nextActionDelay) {
@@ -110,11 +121,11 @@ public class Triggerbot {
             nextActionDelay = 0;
             comboCounter++;
 
-            // Tỷ lệ đánh hụt động (Dynamic Miss Rate) để đánh lừa AI Anti-Cheat
-            float dynamicMissRate = Math.min(0.32f, 0.18f + (comboCounter * 0.015f));
+            // Tỷ lệ đánh hụt động (Dynamic Miss Rate) được tinh chỉnh mượt mà theo chuỗi combo
+            float dynamicMissRate = Math.min(0.28f, 0.14f + (comboCounter * 0.012f));
             if (RANDOM.nextFloat() < dynamicMissRate) {
-                float missYaw = (float) ((RANDOM.nextGaussian() * 3.5) + ((RANDOM.nextFloat() - 0.5f) * 9.0f));
-                float missPitch = (float) ((RANDOM.nextGaussian() * 1.8) + ((RANDOM.nextFloat() - 0.5f) * 4.5f));
+                float missYaw = (float) ((RANDOM.nextGaussian() * 3.0) + ((RANDOM.nextFloat() - 0.5f) * 7.5f));
+                float missPitch = (float) ((RANDOM.nextGaussian() * 1.5) + ((RANDOM.nextFloat() - 0.5f) * 4.0f));
 
                 client.player.setYaw(client.player.getYaw() + missYaw);
                 client.player.setPitch(MathHelper.clamp(client.player.getPitch() + missPitch, -90.0f, 90.0f));
@@ -126,6 +137,7 @@ public class Triggerbot {
                 return;
             }
 
+            // Thực hiện tấn công mượt mà
             client.interactionManager.attackEntity(client.player, target);
             client.player.swingHand(net.minecraft.util.Hand.MAIN_HAND);
             
