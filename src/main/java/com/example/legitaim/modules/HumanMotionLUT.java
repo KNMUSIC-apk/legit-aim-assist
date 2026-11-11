@@ -18,7 +18,7 @@ public class HumanMotionLUT {
         -0.03f, 0.05f, -0.12f, 0.18f, -0.07f, 0.04f, -0.11f, 0.08f, 0.03f, -0.05f
     };
 
-    public static final float[] CLICK_DELAY_LUT = {
+    public static final int[] CLICK_DELAY_LUT = {
         2, 1, 3, 2, 4, 1, 2, 3, 5, 2, 1, 2, 3, 1, 4, 2, 3, 1, 2, 4
     };
 
