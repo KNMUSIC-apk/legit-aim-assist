@@ -18,13 +18,22 @@ public class AimAssist {
     private static AbstractClientPlayerEntity currentTarget = null;
     private static int targetLockTicks = 0;
     
-    // Duy trì chiều cao ngắm theo thao tác kéo chuột thực tế của người chơi (Không tự động giật ngược lên đầu)
     private static double bodyHeightFactor = 0.75; 
     private static int reactionLagTicks = 0;
     private static int sustainedCombatTicks = 0;
 
-    private static float lastYaw = 0.0f;
-    private static float lastPitch = 0.0f;
+    // Biến cho cơ chế Overshoot & Correction (Vẩy quá đà và tự sửa tâm)
+    private static float overshootYaw = 0f;
+    private static float overshootPitch = 0f;
+    private static int overshootTicksLeft = 0;
+
+    // Biến theo dõi vận tốc và đổi hướng của đối thủ (Target Strafing Disruption)
+    private static double lastTargetX = 0.0;
+    private static double lastTargetZ = 0.0;
+    private static double lastTargetVelX = 0.0;
+    private static double lastTargetVelZ = 0.0;
+    private static int strafeSlipTicks = 0;
+
     private static float prevPlayerYaw = 0.0f;
     private static float prevPlayerPitch = 0.0f;
 
@@ -41,24 +50,19 @@ public class AimAssist {
             return;
         }
 
-        // Theo dõi chuyển động tay thực tế của người chơi
         float manualYawDelta = player.getYaw() - prevPlayerYaw;
         float manualPitchDelta = player.getPitch() - prevPlayerPitch;
 
         prevPlayerYaw = player.getYaw();
         prevPlayerPitch = player.getPitch();
 
-        // Nếu người chơi tự kéo chuột, cập nhật mốc độ cao theo tay họ và giữ nguyên
         if (Math.abs(manualPitchDelta) > 0.15f && currentTarget != null) {
             bodyHeightFactor = MathHelper.clamp(bodyHeightFactor - (manualPitchDelta * 0.02), 0.25, 0.90);
         }
 
         float playerVelocityDelta = Math.abs(manualYawDelta) + Math.abs(manualPitchDelta);
-        lastYaw = player.getYaw();
-        lastPitch = player.getPitch();
-
         if (playerVelocityDelta > 16.0f) {
-            return; // Nhường hoàn toàn quyền kiểm soát khi người chơi vẩy chuột mạnh
+            return; 
         }
 
         String itemId = Registries.ITEM
@@ -92,6 +96,14 @@ public class AimAssist {
                 targetLockTicks = 0;
                 reactionLagTicks = 2 + RANDOM.nextInt(3);
                 bodyHeightFactor = 0.70 + (RANDOM.nextDouble() * 0.15);
+                
+                // Khởi tạo thông số vị trí ban đầu của mục tiêu
+                if (currentTarget != null) {
+                    lastTargetX = currentTarget.getX();
+                    lastTargetZ = currentTarget.getZ();
+                    lastTargetVelX = 0;
+                    lastTargetVelZ = 0;
+                }
             }
         }
 
@@ -106,7 +118,40 @@ public class AimAssist {
             return;
         }
 
+        // --- TARGET STRAFING DISRUPTION (Độ trễ quán tính khi địch đảo chiều) ---
+        double targetVelX = currentTarget.getX() - lastTargetX;
+        double targetVelZ = currentTarget.getZ() - lastTargetZ;
+        lastTargetX = currentTarget.getX();
+        lastTargetZ = currentTarget.getZ();
+
+        double dotProduct = (targetVelX * lastTargetVelX) + (targetVelZ * lastTargetVelZ);
+        if (dotProduct < -0.0001 && (targetVelX * targetVelX + targetVelZ * targetVelZ) > 0.001) {
+            strafeSlipTicks = 2 + RANDOM.nextInt(3); // Mất dấu tâm trong 2-4 ticks khi địch đảo hướng gấp
+        }
+        lastTargetVelX = targetVelX;
+        lastTargetVelZ = targetVelZ;
+
+        if (strafeSlipTicks > 0) {
+            strafeSlipTicks--;
+            return; 
+        }
+
         targetLockTicks++;
+
+        // --- OVERSHOOT & CORRECTION (Vẩy quá đà khi bắt đầu khóa mục tiêu) ---
+        if (targetLockTicks == 1) {
+            overshootTicksLeft = 2 + RANDOM.nextInt(2); // Kéo dài trong 2-3 ticks
+            overshootYaw = (float)((RANDOM.nextDouble() - 0.5) * 3.0);
+            overshootPitch = (float)((RANDOM.nextDouble() - 0.5) * 1.5);
+        }
+
+        float currentOvershootYaw = 0f;
+        float currentOvershootPitch = 0f;
+        if (overshootTicksLeft > 0) {
+            overshootTicksLeft--;
+            currentOvershootYaw = overshootYaw * (overshootTicksLeft / 3.0f);
+            currentOvershootPitch = overshootPitch * (overshootTicksLeft / 3.0f);
+        }
 
         double targetX = currentTarget.getX();
         double targetY = currentTarget.getY() + (currentTarget.getHeight() * bodyHeightFactor);
@@ -127,20 +172,26 @@ public class AimAssist {
         float yawDiff = MathHelper.wrapDegrees(targetYaw - player.getYaw());
         float pitchDiff = targetPitch - player.getPitch();
 
+        // --- ATTENTION GATES (Vùng thị giác tập trung / Vùng mù biên giới) ---
+        // Nếu mục tiêu nằm ở góc quá rộng ngoài vùng tập trung trực diện (> 20 độ), mod bỏ qua hoàn toàn
+        if (Math.abs(yawDiff) > 20.0) {
+            return;
+        }
+
         double totalAngle = Math.abs(yawDiff) + Math.abs(pitchDiff);
         if (totalAngle > dynamicFov || totalAngle < 0.12) {
             return;
         }
 
-        // Lấy hệ số mượt và nhiễu từ bảng LUT tiền tính toán (Chống AI phân tích thuật toán sinh số giả)
         int lutIndex = targetLockTicks + RANDOM.nextInt(3);
         float baseSmoothing = HumanMotionLUT.getSmoothing(lutIndex) * Math.min(1.0f, targetLockTicks / 15.0f);
 
         float yawNoise = HumanMotionLUT.getJitterYaw(lutIndex);
         float pitchNoise = HumanMotionLUT.getJitterPitch(lutIndex);
 
-        float appliedYaw = (yawDiff * baseSmoothing) + yawNoise;
-        float appliedPitch = (pitchDiff * baseSmoothing) + pitchNoise;
+        // Cộng thêm thành phần Overshoot vào công thức điều hướng
+        float appliedYaw = (yawDiff * baseSmoothing) + yawNoise + currentOvershootYaw;
+        float appliedPitch = (pitchDiff * baseSmoothing) + pitchNoise + currentOvershootPitch;
 
         appliedYaw = MathHelper.clamp(appliedYaw, -3.2f, 3.2f);
         appliedPitch = MathHelper.clamp(appliedPitch, -1.8f, 1.8f);
@@ -153,14 +204,11 @@ public class AimAssist {
                         90.0f
                 )
         );
-        
-        lastYaw = player.getYaw();
-        lastPitch = player.getPitch();
     }
 
     private static AbstractClientPlayerEntity findBestTarget(PlayerEntity player, MinecraftClient client) {
         AbstractClientPlayerEntity best = null;
-        double minAngle = 34.0;
+        double minAngle = 30.0; // Giới hạn tầm nhìn hẹp hơn để giống góc nhìn thực tế của người chơi
 
         for (AbstractClientPlayerEntity candidate : client.world.getPlayers()) {
             if (candidate == player || !candidate.isAlive() || candidate.isSpectator() || candidate.isRemoved()) {
@@ -190,5 +238,7 @@ public class AimAssist {
         targetLockTicks = 0;
         reactionLagTicks = 0;
         sustainedCombatTicks = 0;
+        overshootTicksLeft = 0;
+        strafeSlipTicks = 0;
     }
 }
